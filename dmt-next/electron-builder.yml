@@ -1,0 +1,30 @@
+appId: com.dmt.analysis.studio
+productName: DMT Analysis Studio
+directories:
+  output: release
+files:
+  - main.js
+  - preload.js
+  - legacy-client.js
+  - updater.js
+  - ui/**
+  - package.json
+extraResources:
+  - from: backend-dist/dmt-service
+    to: backend
+  - from: backend/dmt-backend.exe
+    to: dmt-backend.exe
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+publish:
+  provider: github
+  owner: hctony
+  repo: dmt_studio
+  releaseType: draft

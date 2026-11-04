@@ -1,0 +1,12 @@
+**/__pycache__/
+*.pyc
+**/node_modules/
+**/backend-dist/
+**/backend-build/
+**/release/
+**/*.exe
+.env
+**/.env
+yield_model_settings.json
+*.xlsx
+*.spec
