@@ -20,6 +20,7 @@ test('download and ready state are pushed to renderer',()=>{
  assert.equal(s.states.at(-1).progress,52);s.updater.emit('update-downloaded',{version:'0.3.2'});
  assert.equal(s.states.at(-1).status,'ready');assert.equal(s.states.at(-1).progress,100);
  assert.equal(s.updater.autoRunAppAfterInstall,true);
+ assert.equal(s.updater.requestHeaders['Cache-Control'],'no-cache');
 });
 test('installer failure clears input lock and is recoverable',async()=>{
  const s=setup();s.updater.emit('update-downloaded',{version:'0.3.2'});await s.handlers['update:install']();

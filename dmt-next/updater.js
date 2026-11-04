@@ -3,6 +3,7 @@ function installUpdater(app, ipcMain, isBusy, options = {}) {
   let state = { status: app.isPackaged ? 'idle' : 'development', version: app.getVersion() };
   const publish = patch => {state = {...state, ...patch}; options.onState?.({...state}); return state;};
   autoUpdater.autoDownload = true;
+  autoUpdater.requestHeaders = {...autoUpdater.requestHeaders, 'Cache-Control':'no-cache'};
   // Installation is allowed only through the explicit update/restart action.
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.autoRunAppAfterInstall = true;
