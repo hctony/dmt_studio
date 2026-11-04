@@ -385,6 +385,7 @@ class GatheringModePage(QWidget):
         self.summary_table.setRowCount(0)
         self.status_table.setRowCount(0)
         self.worker = GatheringWorker(mode=self.mode, **config)
+        self.run_context = dict(config)
         self.worker.progress.connect(self.log)
         self.worker.finished.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
@@ -418,6 +419,10 @@ class GatheringModePage(QWidget):
         self.btn_export.setEnabled(True)
         self.output_text = output
         self.summary = summary
+        if getattr(self, 'run_context', None) and not getattr(self.worker, '_stop', False):
+            from core.yield_handoff import remember
+            context = self.run_context
+            remember(context['model'], context['lot'], kind=self.mode, output=output, config=context)
         warning_text = self.format_parent_warnings(summary.get("parent_warnings", []))
         cache = summary.get("cache", {})
         self.result.setPlainText(
@@ -749,6 +754,7 @@ class GatheringTab(QWidget):
         config["base_path_template"] = setting_text(f"gathering/{mode}/path", default_path)
         
         self.batch_worker = GatheringWorker(mode=mode, **config)
+        self.batch_run_context = dict(config)
         self.batch_worker.progress.connect(self.batch_dialog.append_log)
         self.batch_worker.finished.connect(self._on_batch_finished)
         self.batch_worker.failed.connect(self._on_batch_failed)
@@ -777,9 +783,13 @@ class GatheringTab(QWidget):
             self.batch_dialog.append_log(_("중복 검수가 취소되어 결과를 저장하지 않았습니다."))
             self.btn_batch_export.setEnabled(True)
             return
-        lot = self.lot_in.text().strip()
+        context = self.batch_run_context
+        lot = context['lot']
         out_file = self.batch_out_dir / f"Gather_{mode}_{lot}.txt"
         out_file.write_text(output, encoding="utf-8")
+        if not getattr(self.batch_worker, '_stop', False):
+            from core.yield_handoff import remember
+            remember(context['model'], lot, kind=mode, output=output, config=context)
         
         self.batch_dialog.append_log(f"★ {mode} 공정 추출 완료: {out_file}\n")
         self.batch_current_idx += 1

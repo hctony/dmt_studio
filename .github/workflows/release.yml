@@ -23,6 +23,8 @@ jobs:
       - run: node --test dmt-next/test-updater.cjs dmt-next/test-gui-client.cjs dmt-next/test-lifecycle.cjs
       - run: ./node_modules/.bin/electron.cmd smoke-tray.cjs
         working-directory: dmt-next
+      - run: ./node_modules/.bin/electron.cmd smoke-yield-handoff.cjs
+        working-directory: dmt-next
       - run: ./dmt-next/build.ps1
       - run: python dmt-next/smoke-frozen.py
       - run: python dmt-next/smoke-frozen.py dmt-next/release/win-unpacked/resources/backend/dmt-service.exe

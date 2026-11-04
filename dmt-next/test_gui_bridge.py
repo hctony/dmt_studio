@@ -347,11 +347,17 @@ class GuiTests(unittest.TestCase):
         output=self.root/'output';output.mkdir();tab=self.tab(3)
         tab.lot_in.setText('RX1234-');tab.exclude_json_in.clear();tab.skipdata_in.clear();tab.ski_in.clear();tab.x_count_in.setText('2');tab.y_count_in.setText('2');tab.allowance_in.setText('3')
         self.answers['directory']=str(output)
-        with patch.object(GatheringWorker,'build_paths',return_value=[inputs]):
+        with patch('core.yield_handoff.DATA_DIR', self.root), patch.object(GatheringWorker,'build_paths',return_value=[inputs]):
             self.action(tab.btn_batch_export,'click')
             deadline=time.monotonic()+8
             while not tab.btn_batch_export.isEnabled() and time.monotonic()<deadline:self.app.processEvents();time.sleep(.01)
             self.assertTrue(tab.btn_batch_export.isEnabled())
+            yield_tab = self.tab(6)
+            for mode in ('VRS','FVI','IVS'):
+                self.assertEqual(Path(getattr(yield_tab,mode.lower()+'_txt_in').text()).read_text(),(output/f'Gather_{mode}_RX1234-.txt').read_text())
+            self.assertEqual(yield_tab.units_per_strip_in.text(),'4')
+            self.assertEqual(yield_tab.xout_limit_in.text(),'3')
+            self.assertEqual(yield_tab.strip_json_in.text(),'')
         for mode in ('VRS','FVI','IVS'):self.assertTrue((output/f'Gather_{mode}_RX1234-.txt').is_file())
 
     def test_ski_diagnosis_and_validation_json_export(self):

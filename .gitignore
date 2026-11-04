@@ -14,3 +14,4 @@ yield_model_settings.json
 **/*-smoke.png
 **/node-compile-cache/
 **/gather-index.sqlite*
+**/yield-handoff/

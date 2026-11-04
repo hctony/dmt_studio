@@ -60,8 +60,50 @@ class YieldTab(QWidget):
         self.txt_paths: list[Path] = []
         self._build_ui()
 
+    def apply_workflow_inputs(self, force=False) -> None:
+        from core.yield_handoff import latest, PATH_FIELDS
+        entry = latest()
+        if not entry:
+            self.handoff_status.setText(_("이전 완료 데이터가 없습니다. IVS 조회 또는 게더링을 먼저 실행하세요."))
+            return
+        identity = entry['model'] + '/' + entry['lot']
+        changed = setting_text('yield/handoff/context', '') != identity
+        if changed or force:
+            self.model_in.setText(entry['model'])
+            self.units_per_strip_in.clear()
+            self.xout_limit_in.clear()
+            self.restore_model_units()
+            # Model profiles can contain an older LOT's paths. Keep quantities,
+            # but only import paths belonging to this completed context.
+            for name in PATH_FIELDS:
+                getattr(self, name).clear()
+            self.txt_paths = []
+        for name, item in entry['fields'].items():
+            key = 'yield/handoff/' + identity + '/' + name
+            if changed or force or setting_text(key, '') != item['revision']:
+                value = item['value']
+                if name in ('vrs_txt_in', 'fvi_txt_in', 'ivs_txt_in', 'ivs_json_in', 'strip_json_in') and not Path(value).is_file():
+                    value = ''
+                getattr(self, name).setText(value)
+                save_setting_text(key, item['revision'])
+        save_setting_text('yield/handoff/context', identity)
+        settings = {'model_in': 'model', 'vrs_txt_in': 'vrs_txt_paths', 'fvi_txt_in': 'fvi_txt_paths',
+                    'ivs_txt_in': 'ivs_txt_paths', 'ivs_json_in': 'ivs_json_paths', 'txt_in': 'txt_paths',
+                    'strip_json_in': 'strip_json', 'skipdata_in': 'skipdata', 'ski_in': 'ski',
+                    'units_per_strip_in': 'units_per_strip', 'xout_limit_in': 'xout_limit'}
+        for name, setting in settings.items():
+            save_line_edit(getattr(self, name), 'yield/' + setting)
+        self.handoff_status.setText(_("최근 완료 데이터 연결") + ': ' + identity + '\n' +
+            _("빈 항목은 아직 완료 데이터가 없습니다. 확인 후 수율을 계산하세요."))
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        self.handoff_status = QLabel(_("수율 화면 진입 시 최근 완료 데이터를 자동으로 연결합니다."))
+        self.handoff_status.setWordWrap(True)
+        layout.addWidget(self.handoff_status)
+        self.btn_workflow_inputs = QPushButton(_("최근 완료 데이터 다시 불러오기"))
+        self.btn_workflow_inputs.clicked.connect(lambda: self.apply_workflow_inputs(force=True))
+        layout.addWidget(self.btn_workflow_inputs)
         config = QGroupBox(_("수율 계산 입력"))
         form = QFormLayout(config)
         self.model_in = QLineEdit(DEFAULT_MODEL)

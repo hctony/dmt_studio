@@ -166,6 +166,8 @@ class StripIdTab(QWidget):
         self.btn_scan.setEnabled(True)
         self.btn_save.setEnabled(True)
         self.payload = payload
+        from core.yield_handoff import remember_payload
+        remember_payload(payload, 'strip_json')
         self.result.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
 
     def on_failed(self, message: str) -> None:

@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         tabs.setCornerWidget(self.lang_combo)
         
         self.setCentralWidget(tabs)
+        tabs.currentChanged.connect(lambda index: tabs.widget(6).apply_workflow_inputs() if index == 6 else None)
         
     def change_language(self, index: int) -> None:
         lang_code = self.lang_combo.itemData(index)

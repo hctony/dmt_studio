@@ -244,6 +244,8 @@ class IvsStudioTab(QWidget):
         self.btn_save.setEnabled(True)
         self.records = load_records_from_payload(payload)
         self.current_payload = payload
+        from core.yield_handoff import remember_payload
+        remember_payload(payload, 'ivs_json')
         self.refresh_view()
         self.log(_("IVS 스캔 완료"))
 
@@ -259,6 +261,8 @@ class IvsStudioTab(QWidget):
             payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
             self.records = load_records_from_payload(payload)
             self.current_payload = payload
+            from core.yield_handoff import remember_payload
+            remember_payload(payload, 'ivs_json')
             self.btn_save.setEnabled(True)
             self.refresh_view()
         except Exception as exc:

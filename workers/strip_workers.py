@@ -86,6 +86,7 @@ class StripIdThread(QThread):
             ids = sorted(unique_ids)
             self.finished.emit(
                 {
+                    "model": trials[0].model if self.trial_path.strip() and trials else self.model,
                     "lot_id": lot,
                     "strip_count": len(ids),
                     "strip_ids": ids,
