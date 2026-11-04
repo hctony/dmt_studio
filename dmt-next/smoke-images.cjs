@@ -1,0 +1,6 @@
+const {app,BrowserWindow}=require('electron');const path=require('node:path');const assert=require('node:assert/strict');
+app.setPath('userData',path.join(__dirname,'smoke-user-data','images'));process.env.DMT_HEADLESS='1';require('./desktop');
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+app.whenReady().then(async()=>{try{let win;for(let i=0;i<100;i++){win=BrowserWindow.getAllWindows()[0];if(win&&!win.webContents.isLoading())break;await delay(100);}await win.webContents.executeJavaScript('window.studio.snapshot()');
+const result=await win.webContents.executeJavaScript(`(()=>{const src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6V1sAAAAASUVORK5CYII=';lang='ko';const image=render({type:'image',src});document.body.append(image);image.click();const opened=!!document.querySelector('.image-original')&&document.querySelector('.image-original').src===src;document.querySelector('.image-original').closest('.overlay').remove();lang='zh-TW';image.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));const translated=document.querySelector('.image-original').closest('.modal').textContent.includes('不良影像原圖');return {opened,translated};})()`);
+assert(Object.values(result).every(Boolean));console.log(JSON.stringify(result));app.quit();}catch(e){console.error(e);app.exit(1);}});

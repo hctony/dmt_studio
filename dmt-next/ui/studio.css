@@ -3,3 +3,5 @@
 #update-dialog{z-index:30}#update-dialog .modal{width:min(560px,95vw)}#update-restart{background:#2674c5;color:white}
 
 #task-progress{margin-bottom:16px;border-left:4px solid #2674c5}#task-progress[hidden]{display:none}#task-progress progress{height:16px;margin-top:10px;accent-color:#2674c5}#task-progress p{overflow-wrap:anywhere;color:#60758e}
+
+.image{cursor:zoom-in}.image-original{display:block;max-width:none;height:auto}

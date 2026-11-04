@@ -103,6 +103,44 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_defect_summary_opens_full_resolution_image_and_clears_old_images(self):
+        from core.models import DefectRecord
+        from PySide6.QtGui import QPixmap, QImage
+        import base64
+        tab=self.tab(0)
+        record=DefectRecord('S','A','M','L','T','1','Unit','T','1','0','SM03','SM03','','F',1,1,0,0,'xml',['a.png'])
+        tab.records=[record];tab.refresh_view()
+        pix=QPixmap(1200,600);pix.fill(C.Qt.red);data=C.QByteArray();buffer=C.QBuffer(data);buffer.open(C.QIODevice.WriteOnly);pix.save(buffer,'PNG')
+        class Loader(C.QObject):
+            finished=C.Signal(list,list);failed=C.Signal(str)
+            def __init__(self,paths):super().__init__();self.paths=paths
+            def isRunning(self):return False
+            def start(self):self.finished.emit(self.paths,[bytes(data)])
+        with patch('ui.tabs.ivs_tab.ImageLoaderThread',Loader):
+            self.action(tab.summary_table,'table',row=0,column=1)
+            image=self.c.widget(tab.image_labels[0])
+            self.assertEqual(image['type'],'image')
+            decoded=QImage.fromData(base64.b64decode(image['src'].split(',',1)[1]))
+            self.assertEqual(decoded.width(),1200)
+            record.images=[];tab.on_record_selected()
+            self.assertEqual(self.c.widget(tab.image_labels[0])['type'],'label')
+            self.assertIn('경로 없음',tab.image_labels[0].text())
+
+    def test_old_image_response_cannot_replace_new_selection(self):
+        from core.models import DefectRecord
+        from dataclasses import replace
+        tab=self.tab(0);record=DefectRecord('S','A','M','L','T','1','Unit','T','1','0','SM03','SM03','','F',1,1,0,0,'xml',['a.png'])
+        tab.records=[record,replace(record,strip_id='OTHER',images=[])];tab.refresh_view()
+        class Loader(C.QObject):
+            finished=C.Signal(list,list);failed=C.Signal(str)
+            def __init__(self,paths):super().__init__()
+            def isRunning(self):return True
+            def start(self):pass
+        with patch('ui.tabs.ivs_tab.ImageLoaderThread',Loader):
+            tab.defect_list.setCurrentRow(0);old=tab.loader_thread
+            tab.defect_list.setCurrentRow(1);old.failed.emit('old failure')
+            old.finished.emit(['old'],[b'invalid'])
+            self.assertIn('경로 없음',tab.image_labels[0].text())
     def test_running_progress_is_exposed_and_removed_when_done(self):
         worker=C.QThread();self.c.window.progress_test_worker=worker
         worker.dmt_progress={'stage':'현재 Trial 진행률','value':2,'max':4,'detail':'Trial 1/2 · XML 3'}

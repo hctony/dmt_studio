@@ -160,7 +160,7 @@ class Controller(C.QObject):
         if isinstance(w,W.QDateEdit): return dict(d,type='date',value=w.date().toString('yyyy-MM-dd'))
         if isinstance(w,W.QAbstractButton): return dict(d,type='check' if isinstance(w,W.QCheckBox) else 'radio' if isinstance(w,W.QRadioButton) else 'button',text=w.text(),checked=w.isChecked())
         if isinstance(w,W.QLabel):
-            pix=w.pixmap()
+            pix=w.property('dmt_full_pixmap') or w.pixmap()
             if pix and not pix.isNull():
                 cached=self.pixmaps.get(key)
                 if not cached or cached[0]!=pix.cacheKey():

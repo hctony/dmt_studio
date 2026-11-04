@@ -117,6 +117,7 @@ class IvsStudioTab(QWidget):
         left_lay.addWidget(self.summary_label)
         self.summary_table = QTableWidget(0, 3)
         self.summary_table.setHorizontalHeaderLabels([_("불량"), _("Unit 수"), _("비율")])
+        self.summary_table.cellClicked.connect(self.open_defect_images)
         left_lay.addWidget(self.summary_table)
         left_lay.addWidget(QLabel(_("다운로드 불량 그룹 (불량율 높은 순)")))
         self.download_group_list = QListWidget()
@@ -413,21 +414,61 @@ class IvsStudioTab(QWidget):
         rows = build_summary(self.records).get("by_defect_type", [])
         return [str(item["ivs_1"]) for item in rows if str(item.get("ivs_1", "")) not in {"", "0", "9998"}]
 
+    def open_defect_images(self, row: int, column: int) -> None:
+        item = self.summary_table.item(row, 0)
+        if item is None:
+            return
+        self.filter_combo.setCurrentText(f"불량 {item.text()}")
+        if self.defect_list.count():
+            if self.defect_list.currentRow() == 0:
+                self.on_record_selected()
+            else:
+                self.defect_list.setCurrentRow(0)
+
     def on_record_selected(self) -> None:
+        from PySide6.QtCore import QTimer
+        self._image_request = getattr(self, '_image_request', 0) + 1
+        request = self._image_request
+        for label in self.image_labels:
+            label.setProperty('dmt_full_pixmap', None)
+            label.clear()
+            label.setText(_("이미지를 선택하세요"))
         row = self.defect_list.currentRow()
         if row < 0 or row >= len(self.filtered_records):
             return
         record = self.filtered_records[row]
         self.info.setPlainText(json.dumps(asdict(record), ensure_ascii=False, indent=2))
+        if not record.images:
+            for label in self.image_labels:
+                label.setText(_("저장된 이미지 경로 없음"))
+            return
+        for label in self.image_labels:
+            label.setText(_("이미지 불러오는 중…"))
         if self.loader_thread and self.loader_thread.isRunning():
-            self.log(_("이전 이미지 로드가 끝난 뒤 다시 선택하세요."))
+            if not getattr(self, '_image_retry', False):
+                self._image_retry = True
+                def retry():
+                    self._image_retry = False
+                    if getattr(self, '_image_started_request', None) != self._image_request:
+                        self.on_record_selected()
+                QTimer.singleShot(100, retry)
             return
         self.loader_thread = ImageLoaderThread(record.images)
-        self.loader_thread.finished.connect(self.on_images_loaded)
-        self.loader_thread.failed.connect(lambda msg: self.log(f"이미지 로드 실패: {msg}"))
+        self._image_started_request = request
+        self.loader_thread.finished.connect(lambda paths, images: self.on_images_loaded(paths, images) if request == self._image_request else None)
+        self.loader_thread.failed.connect(lambda msg: self.on_image_load_failed(msg) if request == self._image_request else None)
         self.loader_thread.start()
 
+    def on_image_load_failed(self, message: str) -> None:
+        for label in self.image_labels:
+            label.setText(_("이미지 로드 실패 — NAS 연결과 경로를 확인하세요"))
+        self.log(f"이미지 로드 실패: {message}")
+
     def on_images_loaded(self, paths: list[str], images: list[bytes]) -> None:
+        for label in self.image_labels:
+            label.setProperty('dmt_full_pixmap', None)
+            label.clear()
+            label.setText(_("이미지 없음"))
         for label, path, data in zip(self.image_labels, paths, images):
             label.clear()
             if not data:
@@ -435,6 +476,7 @@ class IvsStudioTab(QWidget):
                 continue
             pix = QPixmap()
             if pix.loadFromData(QByteArray(data)):
+                label.setProperty('dmt_full_pixmap', pix)
                 label.setPixmap(pix.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
             else:
                 label.setText(f"디코딩 실패\n{path}")
