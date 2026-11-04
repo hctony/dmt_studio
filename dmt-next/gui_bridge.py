@@ -116,6 +116,19 @@ class Controller(C.QObject):
             elif isinstance(w,W.QDateEdit): w.setDate(C.QDate.fromString(str(value),'yyyy-MM-dd'))
             else: w.setChecked(bool(value))
 
+    def task_progress(self):
+        tasks=[];seen=set()
+        for owner in [self.window, *self.window.findChildren(W.QWidget)]:
+            for worker in vars(owner).values():
+                if not isinstance(worker,C.QThread) or not shiboken6.isValid(worker) or not worker.isRunning() or id(worker) in seen: continue
+                seen.add(id(worker))
+                if not hasattr(worker,'_dmt_started'):
+                    worker._dmt_started=time.monotonic()
+                task=dict(getattr(worker,'dmt_progress',{'stage':'작업 진행 중','value':0,'max':0,'detail':''}))
+                task['elapsed']=int(time.monotonic()-worker._dmt_started)
+                tasks.append(task)
+        return tasks
+
     def busy(self):
         for owner in [self.window, *self.window.findChildren(W.QWidget)]:
             for value in vars(owner).values():
@@ -177,7 +190,7 @@ class Controller(C.QObject):
 
     def snapshot(self):
         dialogs=[w for w in self.app.topLevelWidgets() if isinstance(w,W.QDialog) and w.isVisible()]
-        return {'root':self.widget(self.window.centralWidget()),'dialogs':[{'title':w.windowTitle(),'id':self.register(w),'content':self.widget(w)} for w in dialogs], 'busy':self.busy()}
+        return {'root':self.widget(self.window.centralWidget()),'dialogs':[{'title':w.windowTitle(),'id':self.register(w),'content':self.widget(w)} for w in dialogs], 'busy':self.busy(), 'tasks':self.task_progress()}
 
     def publish(self):
         try:

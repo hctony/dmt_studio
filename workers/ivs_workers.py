@@ -30,6 +30,7 @@ class IvsScanThread(QThread):
         self.model = model
         self.lot = lot
         self.trial_path = trial_path
+        self.dmt_progress = {'stage': 'NAS 연결 중', 'value': 0, 'max': 0, 'detail': ''}
 
     def run(self) -> None:
         ssh = sftp = None
@@ -46,20 +47,26 @@ class IvsScanThread(QThread):
             self.progress.emit(f"Trial {len(trials)}개 스캔 시작")
 
             records: list[DefectRecord] = []
-            for ctx in trials:
+            for trial_index, ctx in enumerate(trials, 1):
+                detail = f'Trial {trial_index}/{len(trials)} · {ctx.machine}/{ctx.trial}'
+                self.dmt_progress = {'stage': '폴더 검색 중', 'value': 0, 'max': 0, 'detail': detail}
                 valid_indexes = load_valid_bundle_indexes(ctx.path, sftp)
                 if not valid_indexes:
                     self.progress.emit(f"[SKIP] {ctx.machine}/{ctx.trial}: ViaMCName 유효 Bundle 없음")
                     continue
-                for strip_folder in iter_dirs(sftp, ctx.path):
-                    idx = folder_index(strip_folder)
-                    if idx is None or idx not in valid_indexes:
-                        continue
+                folders = [folder for folder in iter_dirs(sftp, ctx.path)
+                           if folder_index(folder) is not None and folder_index(folder) in valid_indexes]
+                xml_count = 0
+                self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': 0, 'max': len(folders), 'detail': detail}
+                for folder_index_done, strip_folder in enumerate(folders):
                     strip_path = f"{ctx.path}/{strip_folder}"
                     for xml_path in find_ivs_files(strip_path, sftp):
+                        self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': folder_index_done, 'max': len(folders), 'detail': f'{detail} · Strip {folder_index_done}/{len(folders)} · XML {xml_count} · {strip_folder}'}
                         parsed = parse_ivs_xml(xml_path, sftp, ctx, strip_folder, self.progress.emit)
+                        xml_count += 1
                         if parsed:
                             records.extend(parsed)
+                    self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': folder_index_done + 1, 'max': len(folders), 'detail': f'{detail} · Strip {folder_index_done + 1}/{len(folders)} · XML {xml_count}'}
                 self.progress.emit(f"[{ctx.machine}/{ctx.trial}] 누적 {len(records)}건")
 
             self.finished.emit(records_to_json(model, lot, records))

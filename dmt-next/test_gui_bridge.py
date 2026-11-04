@@ -103,6 +103,30 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_running_progress_is_exposed_and_removed_when_done(self):
+        worker=C.QThread();self.c.window.progress_test_worker=worker
+        worker.dmt_progress={'stage':'현재 Trial 진행률','value':2,'max':4,'detail':'Trial 1/2 · XML 3'}
+        with patch.object(worker,'isRunning',return_value=True):
+            task=self.c.snapshot()['tasks'][0]
+            self.assertEqual((task['value'],task['max']),(2,4))
+            self.assertIn('elapsed',task)
+        self.assertEqual(self.c.snapshot()['tasks'],[])
+        del self.c.window.progress_test_worker
+
+    def test_ivs_progress_counts_completed_folders_not_started_files(self):
+        from workers.ivs_workers import IvsScanThread
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        worker=IvsScanThread('M','L');observed=[];errors=[]
+        worker.failed.connect(errors.append)
+        context=SimpleNamespace(path='/trial',machine='A',trial='T')
+        def parse(*args):observed.append(dict(worker.dmt_progress));return []
+        with patch('workers.ivs_workers.connect',return_value=(MagicMock(),MagicMock())), patch('workers.ivs_workers.list_lot_trials',return_value=[context]), patch('workers.ivs_workers.load_valid_bundle_indexes',return_value={1,2}), patch('workers.ivs_workers.iter_dirs',return_value=['1','2']), patch('workers.ivs_workers.find_ivs_files',return_value=['file.xml']), patch('workers.ivs_workers.parse_ivs_xml',side_effect=parse):
+            worker.run()
+        self.assertEqual(errors,[])
+        self.assertEqual([p['value'] for p in observed],[0,1])
+        self.assertEqual(worker.dmt_progress['value'],2)
+        self.assertEqual(worker.dmt_progress['max'],2)
     def test_model_import_merges_backs_up_and_restores_after_restart(self):
         import config
         path=self.root/'yield_model_settings.json'

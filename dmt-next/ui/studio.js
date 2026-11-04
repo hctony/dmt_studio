@@ -49,7 +49,7 @@ function paint(force=false){
  const focus=document.activeElement;const editing=focus?.dataset.control?{id:focus.dataset.control,value:focus.value,start:focus.selectionStart,end:focus.selectionEnd}:null;
  const scroll=new Map([...document.querySelectorAll('[data-key]')].filter(e=>e.scrollTop||e.scrollLeft).map(e=>[e.dataset.key,[e.scrollTop,e.scrollLeft]]));
  const root=snapshot.root;const nav=$('navigation');nav.replaceChildren();root.labels.forEach((label,i)=>{const b=el('button',i===root.index?'active':'',t(label));b.onclick=()=>action(root.id,'tab',i);nav.append(b);});
- $('title').textContent=t(root.labels[root.index]);$('content').replaceChildren(render(root.content));renderDialogs();status();
+ $('title').textContent=t(root.labels[root.index]);$('content').replaceChildren(render(root.content));renderDialogs();status();renderProgress();
  for(const [key,[top,left]] of scroll){const e=document.querySelector(`[data-key="${key}"]`);if(e){e.scrollTop=top;e.scrollLeft=left;}}
  if(editing){const input=document.querySelector(`[data-control="${editing.id}"]`);if(input&&['INPUT','TEXTAREA'].includes(input.tagName)&&input.type!=='checkbox'&&input.type!=='radio'){input.value=editing.value;input.focus({preventScroll:true});try{input.setSelectionRange(editing.start,editing.end);}catch{}}}
 }
@@ -69,3 +69,14 @@ async function updateStatus(check=false){try{const u=await(check?window.studio.c
 $('updates').onclick=()=>updateStatus(true);
 window.studio.onEvent(m=>{if(m.event==='snapshot'){snapshot=m.snapshot;paint();}else if(m.event==='dialog'){dialogRequest=m.dialog;renderDialogs();}else if(m.event==='error')error(m.error);});
 labels();window.studio.snapshot().then(s=>{snapshot=s;paint();}).catch(error);updateStatus();setInterval(()=>updateStatus(),10000);
+
+function renderProgress(){
+ let host=$('task-progress');if(!host){host=el('section','group');host.id='task-progress';host.setAttribute('aria-label',tr('작업 진행 현황','工作進度'));$('content').before(host);}
+ host.replaceChildren();const tasks=snapshot?.tasks||[];host.hidden=!tasks.length;
+ const names={'NAS 연결 중':['NAS 연결 중','正在連接 NAS'],'폴더 검색 중':['폴더 검색 중','正在搜尋資料夾'],'현재 Trial 진행률':['현재 Trial 진행률','目前 Trial 進度'],'작업 진행 중':['작업 진행 중','工作進行中']};
+ for(const task of tasks){const label=tr(...(names[task.stage]||names['작업 진행 중']));const percent=task.max>0?Math.floor(task.value/task.max*100):null;
+ const text=label+(percent===null?'…':` · ${percent}% (${task.value}/${task.max})`)+tr(` · ${task.elapsed}초 경과`,` · 已經過 ${task.elapsed} 秒`);
+ const bar=el('progress');bar.setAttribute('aria-label',label);if(task.max>0){bar.max=task.max;bar.value=task.value;}
+ host.append(el('strong','',text),bar,el('p','',task.detail||tr('전체 수량을 확인하는 중입니다.','正在確認總數量。')));
+ }
+}
