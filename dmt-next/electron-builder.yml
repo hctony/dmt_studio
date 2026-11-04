@@ -10,6 +10,7 @@ files:
   - ui/studio.html
   - ui/studio.js
   - ui/workflow.js
+  - ui/update-dialog.js
   - ui/studio.css
   - ui/translations.js
   - ui/translations.json

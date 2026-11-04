@@ -65,8 +65,8 @@ $('connection').onclick=async()=>{
 $('language').onchange=()=>{lang=$('language').value;localStorage.setItem('language',lang);labels();paint(true);};
 $('settings').onclick=()=>window.studio.settingsFolder().catch(error);
 $('import').onclick=async()=>{try{const count=await window.studio.importSettings();if(count!==null)$('alert').textContent=tr(`${count}개 모델 설정을 가져왔습니다.`, `已匯入 ${count} 個機種設定。`);}catch(e){error(e);}};
-const updateLabels={development:['개발 실행','開發模式'],idle:['대기','待命'],checking:['업데이트 확인 중','正在檢查更新'],downloading:['다운로드 중','下載中'],current:['최신 버전','最新版本'],ready:['업데이트 준비됨 — 앱 종료 시 적용','更新已備妥 — 關閉程式時安裝'],error:['업데이트 확인 실패','更新檢查失敗']};
-async function updateStatus(check=false){try{const u=await(check?window.studio.checkUpdate():window.studio.updateStatus());const label=updateLabels[u.status]||[u.status,u.status];$('version').textContent=`v${u.version} · ${tr(...label)}${u.progress?' '+u.progress+'%':''}`;}catch(e){error(e);}}
+const updateLabels={development:['개발 실행','開發模式'],idle:['대기','待命'],checking:['업데이트 확인 중','正在檢查更新'],downloading:['다운로드 중','下載中'],current:['최신 버전','最新版本'],ready:['업데이트 준비됨 — 재시작 가능','更新已備妥 — 可重新啟動'],installing:['업데이트 및 재시작 중','正在更新並重新啟動'],error:['업데이트 확인 실패','更新檢查失敗']};
+async function updateStatus(check=false){try{const u=await(check?window.studio.checkUpdate():window.studio.updateStatus());window.showUpdateStatus?.(u,check);const label=updateLabels[u.status]||[u.status,u.status];$('version').textContent=`v${u.version} · ${tr(...label)}${u.progress?' '+u.progress+'%':''}`;}catch(e){error(e);}}
 $('updates').onclick=()=>updateStatus(true);
 window.studio.onEvent(m=>{if(m.event==='snapshot'){snapshot=m.snapshot;paint();}else if(m.event==='dialog'){dialogRequest=m.dialog;renderDialogs();}else if(m.event==='error')error(m.error);});
 labels();window.studio.snapshot().then(s=>{snapshot=s;paint();}).catch(error);updateStatus();setInterval(()=>updateStatus(),10000);

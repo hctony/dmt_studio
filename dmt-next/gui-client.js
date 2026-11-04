@@ -20,7 +20,7 @@ class GuiClient {
       const p=this.pending.get(m.id);if(!p)return;this.pending.delete(m.id);m.error?p.reject(new Error(m.error)):p.resolve(m.result);
     });
   }
-  call(method,args={}){this.start();const id=++this.sequence;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});this.child.stdin.write(JSON.stringify({id,method,args})+'\n');});}
+  call(method,args={}){if(this.updating)return Promise.reject(new Error('UPDATE_INSTALLING'));this.start();const id=++this.sequence;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});this.child.stdin.write(JSON.stringify({id,method,args})+'\n');});}
   close(){const child=this.child;this.child=null;child?.kill();for(const p of this.pending.values())p.reject(new Error('Backend closed'));this.pending.clear();}
 }
 module.exports={GuiClient};

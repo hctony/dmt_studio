@@ -62,7 +62,11 @@ app.whenReady().then(async()=>{
     await fs.writeFile(dest+'.tmp',JSON.stringify(data,null,2));await fs.rename(dest+'.tmp',dest);
     await gui.call('gui.reload-models');return Object.keys(data).length;
   });
-  installUpdater(app,ipcMain,()=>gui.busy||gui.pending.size>0);
+  installUpdater(app,ipcMain,()=>gui.busy||gui.pending.size>0,{
+    onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('update:state',state);},
+    beforeInstall:()=>{gui.updating=true;},
+    onInstallError:()=>{gui.updating=false;}
+  });
   win=new BrowserWindow({width:1500,height:1000,minWidth:900,minHeight:650,backgroundColor:'#f3f6fb',title:'DMT Analysis Studio',webPreferences:{preload:path.join(__dirname,'desktop-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:!app.isPackaged&&process.env.DMT_HEADLESS==='1'}});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.on('close',event=>{if(gui.busy||gui.pending.size){event.preventDefault();dialog.showMessageBoxSync(win,{type:'info',message:'진행 중인 작업을 완료하거나 중지하세요. / 請先完成或停止工作。'});}});

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('studio',{
   importSettings:()=>ipcRenderer.invoke('settings:import'),
   settingsFolder:()=>ipcRenderer.invoke('settings:folder'),
   updateStatus:()=>ipcRenderer.invoke('update:status'),
+  onUpdate:callback=>{const handler=(_e,value)=>callback(value);ipcRenderer.on('update:state',handler);return()=>ipcRenderer.removeListener('update:state',handler);},
   checkUpdate:()=>ipcRenderer.invoke('update:check'),
   installUpdate:()=>ipcRenderer.invoke('update:install')
 });
