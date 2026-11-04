@@ -335,10 +335,10 @@ class IvsStudioTab(QWidget):
             self.filtered_records = [r for r in self.records if r.ivs_1 == code]
         else:
             self.filtered_records = list(self.records)
-        from core.nas import normalize_remote_path
+        from posixpath import normpath
         grouped = {}
         for index, record in enumerate(self.filtered_records):
-            paths = tuple(sorted({normalize_remote_path(p) for p in record.images if p.strip()}))
+            paths = tuple(sorted({normpath(p.strip().replace("\\", "/")) for p in record.images if p.strip()}))
             key = ('images', paths) if paths else ('record', index)
             grouped.setdefault(key, []).append(record)
         self.image_record_groups = list(grouped.values())
@@ -486,8 +486,16 @@ class IvsStudioTab(QWidget):
                         self.on_record_selected()
                 QTimer.singleShot(100, retry)
             return
-        from core.nas import normalize_remote_path
-        unique_paths = list(dict.fromkeys(normalize_remote_path(path) for path in record.images if path.strip()))
+        from posixpath import normpath
+        unique_paths = []
+        seen_paths = set()
+        for path in record.images:
+            if not path.strip():
+                continue
+            key = normpath(path.strip().replace("\\", "/"))
+            if key not in seen_paths:
+                seen_paths.add(key)
+                unique_paths.append(path)
         self.loader_thread = ImageLoaderThread(unique_paths)
         self._image_started_request = request
         self.loader_thread.finished.connect(lambda paths, images: self.on_images_loaded(paths, images) if request == self._image_request else None)
