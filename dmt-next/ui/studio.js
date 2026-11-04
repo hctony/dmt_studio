@@ -53,7 +53,7 @@ function paint(force=false){
  for(const [key,[top,left]] of scroll){const e=document.querySelector(`[data-key="${key}"]`);if(e){e.scrollTop=top;e.scrollLeft=left;}}
  if(editing){const input=document.querySelector(`[data-control="${editing.id}"]`);if(input&&['INPUT','TEXTAREA'].includes(input.tagName)&&input.type!=='checkbox'&&input.type!=='radio'){input.value=editing.value;input.focus({preventScroll:true});try{input.setSelectionRange(editing.start,editing.end);}catch{}}}
 }
-function labels(){document.documentElement.lang=lang;window.studio.language(lang);$('language').value=lang;$('connection').textContent=tr('NAS 연결 설정','NAS 連線設定');$('import').textContent=tr('모델 설정 가져오기','匯入機種設定');$('settings').textContent=tr('설정 폴더 열기','開啟設定資料夾');$('updates').textContent=tr('업데이트 확인','檢查更新');}
+function labels(){document.documentElement.lang=lang;window.studio.language(lang);$('language').value=lang;$('connection').textContent=tr('NAS 연결 설정','NAS 連線設定');$('import').textContent=tr('모델 설정 / 캐시','機種設定 / 快取');$('settings').textContent=tr('설정 폴더 열기','開啟設定資料夾');$('updates').textContent=tr('업데이트 확인','檢查更新');}
 $('connection').onclick=async()=>{
  try{const data=await window.studio.connection();const form=el('form','column');const inputs={};
  const fields=[['DMT_NAS_HOST','NAS 주소','NAS 位址','192.168.0.5'],['DMT_NAS_PORT','포트','連接埠','22'],['DMT_NAS_USER','사용자','使用者','admin'],['DMT_NAS_PASSWORD','비밀번호','密碼',''],['DMT_NAS_ROOT','데이터 루트','資料根目錄','/Pixel/ResultData/Data']];
@@ -64,7 +64,6 @@ $('connection').onclick=async()=>{
 };
 $('language').onchange=()=>{lang=$('language').value;localStorage.setItem('language',lang);labels();paint(true);};
 $('settings').onclick=()=>window.studio.settingsFolder().catch(error);
-$('import').onclick=async()=>{try{const count=await window.studio.importSettings();if(count!==null)$('alert').textContent=tr(`${count}개 모델 설정을 가져왔습니다.`, `已匯入 ${count} 個機種設定。`);}catch(e){error(e);}};
 const updateLabels={development:['개발 실행','開發模式'],idle:['대기','待命'],checking:['업데이트 확인 중','正在檢查更新'],downloading:['다운로드 중','下載中'],current:['최신 버전','最新版本'],ready:['업데이트 준비됨 — 재시작 가능','更新已備妥 — 可重新啟動'],installing:['업데이트 및 재시작 중','正在更新並重新啟動'],error:['업데이트 확인 실패','更新檢查失敗']};
 async function updateStatus(check=false){try{const u=await(check?window.studio.checkUpdate():window.studio.updateStatus());window.showUpdateStatus?.(u,check);const label=updateLabels[u.status]||[u.status,u.status];$('version').textContent=`v${u.version} · ${tr(...label)}${u.progress?' '+u.progress+'%':''}`;}catch(e){error(e);}}
 $('updates').onclick=()=>updateStatus(true);

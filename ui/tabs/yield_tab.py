@@ -270,30 +270,24 @@ class YieldTab(QWidget):
         if not model:
             return
         model_settings = load_yield_model_settings().get(model, {})
-        value = str(model_settings.get("units_per_strip", "")).strip() or setting_text(f"yield/model_units/{model}", "")
-        if value:
-            self.units_per_strip_in.setText(value)
-        xout_limit = str(model_settings.get("xout_limit", "")).strip() or setting_text(f"yield/model_xout_limit/{model}", "")
-        if xout_limit:
-            self.xout_limit_in.setText(xout_limit)
-        vrs_paths = str(model_settings.get("vrs_txt_paths", "")).strip() or setting_text(f"yield/model_vrs_txt/{model}", "")
-        if vrs_paths:
-            self.vrs_txt_in.setText(vrs_paths)
-        fvi_paths = str(model_settings.get("fvi_txt_paths", "")).strip() or setting_text(f"yield/model_fvi_txt/{model}", "")
-        if fvi_paths:
-            self.fvi_txt_in.setText(fvi_paths)
-        ivs_paths = str(model_settings.get("ivs_txt_paths", "")).strip() or setting_text(f"yield/model_ivs_txt/{model}", "")
-        if ivs_paths:
-            self.ivs_txt_in.setText(ivs_paths)
-        ivs_json_paths = str(model_settings.get("ivs_json_paths", "")).strip() or setting_text(f"yield/model_ivs_json/{model}", "")
-        if ivs_json_paths:
-            self.ivs_json_in.setText(ivs_json_paths)
-        skipdata_path = str(model_settings.get("skipdata_path", "")).strip() or setting_text(f"yield/model_skipdata/{model}", "")
-        if skipdata_path:
-            self.skipdata_in.setText(skipdata_path)
-        ski_path = str(model_settings.get("ski_path", "")).strip() or setting_text(f"yield/model_ski/{model}", "")
-        if ski_path:
-            self.ski_in.setText(ski_path)
+        fields = [
+            ("units_per_strip", "units_per_strip_in", "model_units"),
+            ("xout_limit", "xout_limit_in", "model_xout_limit"),
+            ("vrs_txt_paths", "vrs_txt_in", "model_vrs_txt"),
+            ("fvi_txt_paths", "fvi_txt_in", "model_fvi_txt"),
+            ("ivs_txt_paths", "ivs_txt_in", "model_ivs_txt"),
+            ("ivs_json_paths", "ivs_json_in", "model_ivs_json"),
+            ("skipdata_path", "skipdata_in", "model_skipdata"),
+            ("ski_path", "ski_in", "model_ski"),
+        ]
+        for key, attribute, setting in fields:
+            if key in model_settings:
+                # Saved blanks must clear a previous model's path, not revive it.
+                getattr(self, attribute).setText(str(model_settings[key]).strip())
+            else:
+                value = setting_text(f"yield/{setting}/{model}", "")
+                if value:
+                    getattr(self, attribute).setText(value)
 
     def save_model_yield_settings(self) -> None:
         model = self.model_in.text().strip()

@@ -103,6 +103,46 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_model_import_merges_backs_up_and_restores_after_restart(self):
+        import config
+        path=self.root/'yield_model_settings.json'
+        path.write_text(json.dumps({'KEEP':{'xout_limit':'2'},'MODEL':{'units_per_strip':'88','ski_path':'old.ski'}}))
+        self.c.input_path=self.root/'gui-inputs.json'
+        tab=self.tab(6);tab.model_in.setText('MODEL');tab.xout_limit_in.setText('13')
+        tab.vrs_txt_in.setText('previous-lot.txt');self.c.save_inputs()
+        old_inputs=self.c.input_path.read_bytes()
+        with patch.object(config,'YIELD_MODEL_SETTINGS_PATH',path):
+            result=self.c.model_profiles.import_data({'MODEL':{'xout_limit':18,'vrs_txt_paths':r'Z:\Taiwan\LOT01.txt','ivs_json_paths':''}})
+            stored=json.loads(path.read_text())
+            self.assertIn('KEEP',stored);self.assertEqual(stored['MODEL']['ski_path'],'old.ski')
+            self.assertEqual(tab.xout_limit_in.text(),'18');self.assertEqual(tab.vrs_txt_in.text(),r'Z:\Taiwan\LOT01.txt')
+            self.assertEqual((Path(result['backup'])/'gui-inputs.json').read_bytes(),old_inputs)
+            self.assertEqual(json.loads((Path(result['backup'])/'yield_model_settings.json').read_text())['MODEL']['ski_path'],'old.ski')
+            tab.xout_limit_in.setText('0');tab.vrs_txt_in.clear();self.c.restore_inputs()
+            self.assertEqual(tab.xout_limit_in.text(),'18');self.assertEqual(tab.vrs_txt_in.text(),r'Z:\Taiwan\LOT01.txt')
+            gather=self.tab(3);gather.allowance_in.setText('5');gather.x_count_in.setText('22');gather.y_count_in.setText('4')
+            self.c.model_profiles.apply('MODEL');self.assertEqual(gather.allowance_in.text(),'5')
+            self.c.model_profiles.apply('MODEL',True);self.assertEqual(gather.allowance_in.text(),'18')
+            self.assertEqual((gather.x_count_in.text(),gather.y_count_in.text()),('22','4'))
+
+    def test_invalid_or_busy_model_import_leaves_files_unchanged(self):
+        import config
+        path=self.root/'yield_model_settings.json';path.write_text('{"KEEP":{"xout_limit":"2"}}')
+        before=path.read_bytes()
+        with patch.object(config,'YIELD_MODEL_SETTINGS_PATH',path):
+            for payload in ({},[],{'BAD':{'xout_limit':-1}},{'BAD':{'xout_limit':True}},{'BAD':{'vrs_txt_paths':[]}}, {'GOOD':{'xout_limit':'3'},'BAD':{'units_per_strip':'0'}}):
+                with self.assertRaises(ValueError):self.c.model_profiles.import_data(payload)
+                self.assertEqual(path.read_bytes(),before)
+            self.c.action_depth=1
+            with self.assertRaises(ValueError):self.c.model_profiles.import_data({'GOOD':{'xout_limit':'3'}})
+            self.c.action_depth=0
+            self.assertEqual(path.read_bytes(),before)
+
+    def test_model_switch_respects_explicit_blank_instead_of_stale_cache(self):
+        tab=self.tab(6);tab.model_in.setText('BLANK');tab.vrs_txt_in.setText('previous-lot.txt')
+        with patch('ui.tabs.yield_tab.load_yield_model_settings',return_value={'BLANK':{'vrs_txt_paths':'','xout_limit':'0'}}), patch('ui.tabs.yield_tab.setting_text',return_value='stale-cache'):
+            tab.restore_model_units()
+        self.assertEqual(tab.vrs_txt_in.text(),'');self.assertEqual(tab.xout_limit_in.text(),'0')
     def test_workflow_recommendation_apply_preserves_existing_and_does_not_execute(self):
         from workflow_assistant import WorkflowHistory
         self.c.workflow.history=WorkflowHistory(self.root)

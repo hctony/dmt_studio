@@ -37,6 +37,8 @@ class Controller(C.QObject):
         from workflow_bridge import WorkflowBridge
         self.action_depth = 0
         self.workflow = WorkflowBridge(self, self.input_path.parent)
+        from model_profiles import ModelProfiles
+        self.model_profiles = ModelProfiles(self)
         self.window.show()
         self.incoming.connect(self.handle, C.Qt.QueuedConnection)
         self.timer = C.QTimer(self)
@@ -199,6 +201,9 @@ class Controller(C.QObject):
             elif method=='gui.reload-models':
                 self.window.centralWidget().widget(6).restore_model_units()
                 self.save_inputs();result=True
+            elif method=='gui.models': result=self.model_profiles.status()
+            elif method=='gui.import-models': result=self.model_profiles.import_data(a['data'])
+            elif method=='gui.apply-model': result=self.model_profiles.apply(a['model'], a.get('gathering', False))
             elif method=='gui.action':
                 w=self.widgets.get(str(a['id']))
                 if w is None or not shiboken6.isValid(w): raise ValueError('Control no longer exists')

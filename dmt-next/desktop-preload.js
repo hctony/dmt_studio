@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('studio',{
   reply:args=>ipcRenderer.invoke('gui:reply',args),
   onEvent:callback=>{const handler=(_e,value)=>callback(value);ipcRenderer.on('gui:event',handler);return()=>ipcRenderer.removeListener('gui:event',handler);},
   importSettings:()=>ipcRenderer.invoke('settings:import'),
+  modelSettings:()=>ipcRenderer.invoke('settings:models'),
+  applyModel:args=>ipcRenderer.invoke('settings:apply-model',args),
   settingsFolder:()=>ipcRenderer.invoke('settings:folder'),
   updateStatus:()=>ipcRenderer.invoke('update:status'),
   onUpdate:callback=>{const handler=(_e,value)=>callback(value);ipcRenderer.on('update:state',handler);return()=>ipcRenderer.removeListener('update:state',handler);},

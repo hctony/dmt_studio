@@ -9,6 +9,7 @@ files:
   - updater.js
   - ui/studio.html
   - ui/studio.js
+  - ui/model-settings.js
   - ui/workflow.js
   - ui/update-dialog.js
   - ui/backend-recovery.js

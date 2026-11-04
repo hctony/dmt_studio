@@ -58,15 +58,18 @@ app.whenReady().then(async()=>{
     await fs.writeFile(r.filePath,JSON.stringify(data,null,2),'utf8');return r.filePath;
   });
   ipcMain.handle('settings:folder',()=>shell.openPath(app.getPath('userData')));
+  ipcMain.handle('settings:models',()=>gui.call('gui.models'));
+  ipcMain.handle('settings:apply-model',(_e,args)=>{
+    if(gui.busy||gui.pending.size)throw new Error('작업 완료 후 사용하세요. / 請先完成工作。');
+    return gui.call('gui.apply-model',{model:args.model,gathering:args.gathering===true});
+  });
   ipcMain.handle('settings:import',async()=>{
     if(gui.busy||gui.pending.size)throw new Error('작업 완료 후 가져오세요. / 請先完成工作。');
     const r=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'Model settings',extensions:['json','txt']}]});if(r.canceled)return null;
-    const source=await fs.readFile(r.filePaths[0],'utf8');const data=JSON.parse(source.replace(/^\uFEFF/,''));
-    if(!data||typeof data!=='object'||Array.isArray(data))throw new Error('Invalid model settings');
-    const dest=path.join(app.getPath('userData'),'yield_model_settings.json');
-    try{await fs.copyFile(dest,dest+'.bak');}catch(e){if(e.code!=='ENOENT')throw e;}
-    await fs.writeFile(dest+'.tmp',JSON.stringify(data,null,2));await fs.rename(dest+'.tmp',dest);
-    await gui.call('gui.reload-models');return Object.keys(data).length;
+    if((await fs.stat(r.filePaths[0])).size>5*1024*1024)throw new Error('설정 파일이 너무 큽니다. / 設定檔過大。');
+    const source=await fs.readFile(r.filePaths[0],'utf8');let data;
+    try{data=JSON.parse(source.replace(/^\uFEFF/,''));}catch{throw new Error('올바른 JSON 파일을 선택하세요. / 請選擇有效的 JSON 檔案。');}
+    return gui.call('gui.import-models',{data});
   });
   installUpdater(app,ipcMain,()=>gui.busy||gui.pending.size>0,{
     onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('update:state',state);},
