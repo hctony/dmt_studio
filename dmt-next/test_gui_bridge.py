@@ -103,6 +103,34 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_workflow_recommendation_apply_preserves_existing_and_does_not_execute(self):
+        from workflow_assistant import WorkflowHistory
+        self.c.workflow.history=WorkflowHistory(self.root)
+        tab=self.tab(6);tab.model_in.setText('M1')
+        key=next(k for k,w in self.c.input_widgets() if w is tab.vrs_txt_in)
+        history=self.c.workflow.history
+        for lot in ['AA01-','AA02-','AA03-']:
+            history.start('M1',lot,'test');history.record('action',{key:f'D:\\data\\{lot}.txt'});history.finish('success')
+        tab.vrs_txt_in.setText('manual.txt')
+        result=self.c.workflow.handle('apply',dict(model='M1',lot='AA04-',keys=[key]))
+        self.assertEqual(result['applied'],[]);self.assertEqual(tab.vrs_txt_in.text(),'manual.txt')
+        with patch.object(tab,'calculate') as calculate:
+            result=self.c.workflow.handle('apply',dict(model='M1',lot='AA04-',keys=[key],overwrite=True))
+            self.assertEqual(tab.vrs_txt_in.text(),'D:\\data\\AA04-.txt');calculate.assert_not_called()
+        tab.model_in.setText('OTHER');tab.vrs_txt_in.clear()
+        self.assertEqual(self.c.workflow.handle('apply',dict(model='M1',lot='AA04-',keys=[key]))['applied'],[])
+    def test_workflow_records_action_and_blocks_finish_during_work(self):
+        from workflow_assistant import WorkflowHistory
+        self.c.workflow.history=WorkflowHistory(self.root)
+        tab=self.tab(8)
+        self.c.workflow.handle('start',dict(model='M1',lot='AA01-',version='test'))
+        self.action(tab.btn_preview,'click')
+        self.assertTrue(any(e['event']=='action' for e in self.c.workflow.history.active['events']))
+        self.c.action_depth=1
+        with self.assertRaises(ValueError):self.c.workflow.handle('finish',dict(outcome='success'))
+        self.c.action_depth=0
+        self.c.workflow.handle('finish',dict(outcome='failed',note='validation expected'))
+        self.assertEqual(self.c.workflow.history.recommend('M1','AA04-'),[])
     def test_nested_dialog_protocol(self):
         # Restore the real event-loop handshake, not the fixture's canned response.
         self.c.ask=Controller.ask.__get__(self.c)

@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import traceback
+import time
 from pathlib import Path
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
@@ -33,6 +34,9 @@ class Controller(C.QObject):
         self.window = MainWindow()
         self.window.resize(1440, 1000)
         self.restore_inputs()
+        from workflow_bridge import WorkflowBridge
+        self.action_depth = 0
+        self.workflow = WorkflowBridge(self, self.input_path.parent)
         self.window.show()
         self.incoming.connect(self.handle, C.Qt.QueuedConnection)
         self.timer = C.QTimer(self)
@@ -61,6 +65,8 @@ class Controller(C.QObject):
         W.QFileDialog.getSaveFileName = staticmethod(lambda *a, **kw: files('save', *a, **kw))
         W.QFileDialog.getExistingDirectory = staticmethod(lambda *a, **kw: files('directory', *a, **kw))
         def message(kind, parent, title, text, buttons=None, defaultButton=None, **kw):
+            if hasattr(self,'workflow'):
+                self.workflow.history.record('message',level=kind,title=title,text=self.workflow.history.clean(text)[:6000])
             buttons = buttons if buttons is not None else (W.QMessageBox.Yes | W.QMessageBox.No if kind == 'question' else W.QMessageBox.Ok)
             options = [{'name':b.name, 'value':b.value} for b in (W.QMessageBox.Ok,W.QMessageBox.Yes,W.QMessageBox.No,W.QMessageBox.Cancel,W.QMessageBox.Close,W.QMessageBox.Retry,W.QMessageBox.Abort) if buttons & b]
             result = self.ask('message', {'title':title, 'text':text, 'level':kind, 'buttons':options})
@@ -173,6 +179,7 @@ class Controller(C.QObject):
 
     def publish(self):
         try:
+            self.workflow.poll()
             snapshot=self.snapshot(); encoded=json.dumps(snapshot,ensure_ascii=False)
             if encoded!=self.last_snapshot:
                 self.last_snapshot=encoded;self.emit({'event':'snapshot','snapshot':snapshot})
@@ -187,6 +194,8 @@ class Controller(C.QObject):
                 if record: record['value']=a.get('value');record['loop'].quit()
                 result=True
             elif method=='gui.snapshot': result=self.snapshot()
+            elif method.startswith('workflow.'):
+                result=self.workflow.handle(method.split('.',1)[1],a)
             elif method=='gui.reload-models':
                 self.window.centralWidget().widget(6).restore_model_units()
                 self.save_inputs();result=True
@@ -195,7 +204,13 @@ class Controller(C.QObject):
                 if w is None or not shiboken6.isValid(w): raise ValueError('Control no longer exists')
                 if not w.isEnabled(): raise ValueError('Control is disabled')
                 action=a['action'];v=a.get('value')
-                if action=='click' and isinstance(w,W.QAbstractButton): w.click()
+                if action=='click' and isinstance(w,W.QAbstractButton):
+                    started=time.monotonic();tab=self.window.centralWidget().currentIndex()
+                    self.action_depth+=1
+                    try: w.click()
+                    finally:
+                        self.action_depth-=1
+                        self.workflow.action(tab,w.text(),action,started)
                 elif action=='input' and isinstance(w,W.QLineEdit): w.setText(str(v));w.editingFinished.emit()
                 elif action=='text' and isinstance(w,W.QTextEdit) and not w.isReadOnly(): w.setPlainText(str(v))
                 elif action=='date' and isinstance(w,W.QDateEdit): w.setDate(C.QDate.fromString(v,'yyyy-MM-dd'))
@@ -219,10 +234,13 @@ class Controller(C.QObject):
                 elif action=='reject' and isinstance(w,W.QDialog): w.reject()
                 else: raise ValueError('Unsupported control action')
                 self.save_inputs();result=True
+                if action in ('input','edit-select','select','date','check'):
+                    self.workflow.action(self.window.centralWidget().currentIndex(),str(a['id']),action,time.monotonic())
             else: raise ValueError('Unknown GUI method')
             self.emit({'id':request.get('id'),'result':result})
             self.publish()
         except Exception as exc:
+            self.workflow.history.record('bridge_error',error=self.workflow.history.clean(exc))
             self.emit({'id':request.get('id'),'error':str(exc)})
 
 

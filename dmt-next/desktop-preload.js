@@ -1,5 +1,7 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('studio',{
+  workflow:(method,args)=>ipcRenderer.invoke('workflow:call',method,args),
+  exportWorkflows:()=>ipcRenderer.invoke('workflow:export'),
   language:value=>ipcRenderer.invoke('ui:language',value),
   connection:()=>ipcRenderer.invoke('settings:connection-read'),
   saveConnection:values=>ipcRenderer.invoke('settings:connection-save',values),

@@ -30,10 +30,24 @@ app.whenReady().then(async()=>{
   await win.webContents.executeJavaScript("document.querySelector('#modals .modal-actions button').click()");
   await delay(250);
   const state=await win.webContents.executeJavaScript('window.studio.snapshot()');if(state.busy)throw new Error('Dialog reply did not complete');
+  await win.webContents.executeJavaScript("document.getElementById('workflow').click()");await delay(150);
+  const workflowModal=await win.webContents.executeJavaScript("[...document.querySelectorAll('.modal h2')].some(e=>e.textContent.includes('LOT 테스트'))");
+  if(!workflowModal)throw new Error('Workflow panel missing');
+  const workflowImage=await win.webContents.capturePage();fs.writeFileSync(path.join(__dirname,'workflow-smoke.png'),workflowImage.toPNG());
+  await win.webContents.executeJavaScript("document.querySelector('body > .overlay .modal-head button').click()");
+  await win.webContents.executeJavaScript("window.studio.workflow('start',{model:'SMOKE',lot:'SMOKE01-'})");
+  await win.webContents.executeJavaScript("[...document.querySelectorAll('#content button')].find(b=>b.textContent==='미리보기').click()");await delay(200);
+  await win.webContents.executeJavaScript("document.querySelector('#modals .modal-actions button').click()");await delay(150);
+  await win.webContents.executeJavaScript("window.studio.workflow('finish',{outcome:'failed',note:'Automated UI validation only'})");
+  const exportPath=path.join(__dirname,'smoke-user-data','exported-workflows.json');
+  require('electron').dialog.showSaveDialog=async()=>({canceled:false,filePath:exportPath});
+  await win.webContents.executeJavaScript('window.studio.exportWorkflows()');
+  const exported=JSON.parse(fs.readFileSync(exportPath,'utf8'));
+  if(!exported.runs.some(r=>r.lot==='SMOKE01-'&&r.events.some(e=>e.event==='action')))throw new Error('Workflow action log not exported');
   await win.webContents.executeJavaScript(`window.studio.action({id:${JSON.stringify(initial.root.id)},action:'tab',value:0})`);
   await delay(800);
   try{const image=await win.webContents.capturePage();fs.writeFileSync(path.join(__dirname,'studio-smoke.png'),image.toPNG());}catch(e){console.log('Screenshot unavailable: '+e.message);}
-  console.log(JSON.stringify({tabs:initial.root.labels.length,translation:translated,dialogRoundTrip:true}));
+  console.log(JSON.stringify({tabs:initial.root.labels.length,translation:translated,dialogRoundTrip:true,workflowPanel:true,workflowExport:true}));
   app.quit();
  }catch(e){console.error(e);app.exit(1);}
 });

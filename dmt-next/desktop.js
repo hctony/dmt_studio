@@ -40,6 +40,17 @@ app.whenReady().then(async()=>{
   ipcMain.handle('gui:snapshot',()=>gui.call('gui.snapshot'));
   ipcMain.handle('gui:action',(_e,args)=>gui.call('gui.action',args));
   ipcMain.handle('gui:reply',(_e,args)=>gui.call('dialog.reply',args));
+  ipcMain.handle('workflow:call',(_e,method,args={})=>{
+    if(!['status','start','finish','recommend','apply','preferences'].includes(method))throw new Error('Invalid workflow method');
+    if(['start','finish','apply'].includes(method)&&(gui.busy||gui.pending.size))throw new Error('작업 완료 후 사용하세요. / 請先完成工作。');
+    return gui.call('workflow.'+method,{...args,version:app.getVersion()});
+  });
+  ipcMain.handle('workflow:export',async()=>{
+    const data=await gui.call('workflow.export');
+    const r=await dialog.showSaveDialog(win,{title:'LOT 로그 내보내기 / 匯出 LOT 紀錄',defaultPath:'dmt-lot-workflows.json',filters:[{name:'JSON',extensions:['json']}]});
+    if(r.canceled)return null;
+    await fs.writeFile(r.filePath,JSON.stringify(data,null,2),'utf8');return r.filePath;
+  });
   ipcMain.handle('settings:folder',()=>shell.openPath(app.getPath('userData')));
   ipcMain.handle('settings:import',async()=>{
     if(gui.busy||gui.pending.size)throw new Error('작업 완료 후 가져오세요. / 請先完成工作。');
