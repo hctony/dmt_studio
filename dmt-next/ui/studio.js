@@ -48,8 +48,8 @@ function paint(force=false){
  if(!snapshot)return;const hash=JSON.stringify(snapshot)+lang;if(hash===lastHash&&!force)return;lastHash=hash;
  const focus=document.activeElement;const editing=focus?.dataset.control?{id:focus.dataset.control,value:focus.value,start:focus.selectionStart,end:focus.selectionEnd}:null;
  const scroll=new Map([...document.querySelectorAll('[data-key]')].filter(e=>e.scrollTop||e.scrollLeft).map(e=>[e.dataset.key,[e.scrollTop,e.scrollLeft]]));
- const root=snapshot.root;const nav=$('navigation');nav.replaceChildren();root.labels.forEach((label,i)=>{const b=el('button',i===root.index?'active':'',t(label));b.onclick=()=>action(root.id,'tab',i);nav.append(b);});
- $('title').textContent=t(root.labels[root.index]);$('content').replaceChildren(render(root.content));renderDialogs();status();renderProgress();
+ const root=snapshot.root;const nav=$('navigation');nav.replaceChildren();root.labels.forEach((label,i)=>{const b=el('button',i===root.index?'active':'',stepLabel(i,label));b.onclick=()=>action(root.id,'tab',i);nav.append(b);});
+ $('title').textContent=stepLabel(root.index,root.labels[root.index]);renderYieldGuide(root);$('content').replaceChildren(render(root.content));renderDialogs();status();renderProgress();
  for(const [key,[top,left]] of scroll){const e=document.querySelector(`[data-key="${key}"]`);if(e){e.scrollTop=top;e.scrollLeft=left;}}
  if(editing){const input=document.querySelector(`[data-control="${editing.id}"]`);if(input&&['INPUT','TEXTAREA'].includes(input.tagName)&&input.type!=='checkbox'&&input.type!=='radio'){input.value=editing.value;input.focus({preventScroll:true});try{input.setSelectionRange(editing.start,editing.end);}catch{}}}
 }
@@ -79,4 +79,16 @@ function renderProgress(){
  const bar=el('progress');bar.setAttribute('aria-label',label);if(task.max>0){bar.max=task.max;bar.value=task.value;}
  host.append(el('strong','',text),bar,el('p','',task.detail||tr('전체 수량을 확인하는 중입니다.','正在確認總數量。')));
  }
+}
+
+const yieldSteps=[{tab:0,number:'①',ko:'IVS 분석/조회',zh:'IVS 分析/查詢',hint:['IVS 스캔 또는 JSON 불러오기로 불량과 이미지를 확인하고, 필요한 IVS JSON을 저장하세요.','透過 IVS 掃描或載入 JSON 確認不良與影像，並儲存所需的 IVS JSON。']},{tab:3,number:'②',ko:'게더링 집계',zh:'整合統計',hint:['같은 모델과 LOT의 공정 데이터를 집계하고 결과를 저장하세요.','彙整相同機種與 LOT 的製程資料，並儲存結果。']},{tab:6,number:'③',ko:'수율 계산',zh:'良率計算',hint:['집계 파일과 IVS JSON, Strip당 수량 및 X-out 허용수를 확인한 뒤 수율을 계산하세요.','確認彙整檔案、IVS JSON、每片 Strip 數量與 X-out 容許數後，計算良率。']}];
+function stepLabel(index,fallback){const step=yieldSteps.find(s=>s.tab===index);return step?`${step.number} ${tr(step.ko,step.zh)}`:t(fallback);}
+function renderYieldGuide(root){
+ let host=$('yield-guide');if(!host){host=el('section','yield-guide');host.id='yield-guide';$('content').before(host);}
+ const current=yieldSteps.findIndex(s=>s.tab===root.index);host.hidden=current<0;host.replaceChildren();if(current<0)return;
+ host.append(el('strong','',tr('수율 집계 진행 순서','良率彙整操作順序')));
+ const steps=el('nav','yield-steps');steps.setAttribute('aria-label',tr('수율 집계 단계','良率彙整步驟'));
+ yieldSteps.forEach((step,index)=>{if(index)steps.append(el('span','step-arrow','→'));const button=el('button',index===current?'current-step':'',stepLabel(step.tab));button.dataset.step=String(index+1);if(index===current)button.setAttribute('aria-current','step');button.onclick=()=>action(root.id,'tab',step.tab);steps.append(button);});
+ host.append(steps,el('p','',tr(...yieldSteps[current].hint)));
+ if(current<yieldSteps.length-1){const next=yieldSteps[current+1];const button=el('button','next-step',tr(`다음 단계: ${next.number} ${next.ko}로 이동`,`下一步：${next.number} ${next.zh}`));button.onclick=()=>action(root.id,'tab',next.tab);host.append(button);}
 }
