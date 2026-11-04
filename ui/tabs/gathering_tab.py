@@ -118,6 +118,97 @@ class GatherDuplicateDialog(QDialog):
         return "\n".join(lines)
 
 
+class GatherReviewDialog(QDialog):
+    def __init__(self, plan, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_("중복 Strip 개별 검수"))
+        self.resize(1150, 800)
+        self.plan = plan
+        self.choices = [entry['recommended'] for entry in plan]
+        layout = QVBoxLayout(self)
+        self.overview = QLabel()
+        layout.addWidget(self.overview)
+        layout.addWidget(QLabel(_("목록에서 원하는 Strip만 선택해 검수하세요. 좌표가 같아도 불량 코드가 다르면 확인이 필요합니다.")))
+        self.strip_list = QListWidget()
+        self.strip_list.currentRowChanged.connect(self.show_strip)
+        layout.addWidget(self.strip_list)
+        self.candidate_combo = QComboBox()
+        self.candidate_combo.currentIndexChanged.connect(self.choose)
+        layout.addWidget(self.candidate_combo)
+        self.details = QTextEdit()
+        self.details.setReadOnly(True)
+        layout.addWidget(self.details)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        for entry in plan:
+            self.strip_list.addItem(entry['strip_id'])
+        self.refresh_status()
+        self.strip_list.setCurrentRow(next((i for i, c in enumerate(self.choices) if c is None), 0))
+
+    def refresh_status(self):
+        pending = sum(c is None for c in self.choices)
+        self.overview.setText(_("전체 / 확인 필요") + f": {len(self.plan)} / {pending}")
+        for i, entry in enumerate(self.plan):
+            status = _("검수 필요") if self.choices[i] is None else entry['reason'] if self.choices[i] == entry['recommended'] else _("개별 선택 완료")
+            self.strip_list.item(i).setText(f"{entry['strip_id']} | {status}")
+
+    def show_strip(self, row):
+        if row < 0:
+            return
+        entry = self.plan[row]
+        self.candidate_combo.blockSignals(True)
+        self.candidate_combo.clear()
+        self.candidate_combo.addItem(_("선택하세요"), None)
+        self.candidate_combo.addItem(_("기존 자동 결과 유지 (개별 확인)"), 'auto')
+        for i, payload in enumerate(entry['candidates']):
+            name = _("Merge 후보") if i >= entry['original_count'] else _("데이터 후보") + f" {i+1}"
+            exact = set(payload['coords']) | set(entry['bbt_coords']) == set(entry['ski_coords']) if entry['ski_coords'] else False
+            self.candidate_combo.addItem(f"{name} | " + (_("SKI 좌표 일치") if exact else _("SKI 미일치 또는 없음")), i)
+        self.candidate_combo.setCurrentIndex(self.candidate_combo.findData(self.choices[row]))
+        self.candidate_combo.blockSignals(False)
+        self.show_details(row)
+
+    def choose(self, index):
+        row = self.strip_list.currentRow()
+        if row < 0:
+            return
+        self.choices[row] = self.candidate_combo.currentData()
+        self.refresh_status()
+        self.show_details(row)
+
+    def show_details(self, row):
+        entry = self.plan[row]
+        choice = self.choices[row]
+        payload = entry['candidates'][choice if isinstance(choice, int) else 0]
+        combined = set(payload['coords']) | set(entry['bbt_coords'])
+        ski = set(entry['ski_coords'])
+        text = _("판정 근거") + ': ' + _(entry['reason']) + '\n'
+        text += _("최종 SKI 대비 누락 좌표") + ': ' + (', '.join(sorted(ski-combined)) or '-') + '\n'
+        text += _("최종 SKI 외 추가 좌표") + ': ' + (', '.join(sorted(combined-ski)) or '-') + '\n'
+        conflict = dict(entry, current=entry['candidates'][0], candidate=payload)
+        current_coords = set(conflict['current']['coords'])
+        candidate_coords = set(payload['coords'])
+        conflict.update(common=sorted(current_coords & candidate_coords), current_only=sorted(current_coords-candidate_coords), candidate_only=sorted(candidate_coords-current_coords))
+        def score(coords):
+            if not ski:
+                return None
+            missing, extra = len((ski-set(entry['bbt_coords']))-coords), len(coords-(ski-set(entry['bbt_coords'])))
+            return (missing+extra, extra, missing, abs(len(coords)-len(ski-set(entry['bbt_coords']))))
+        conflict.update(current_score=score(current_coords), candidate_score=score(candidate_coords))
+        text += GatherDuplicateDialog.format_conflict(self, conflict)
+        if not ski:
+            text = _("최종 SKI 좌표가 없어 일치 여부를 검증할 수 없습니다.") + '\n' + text
+        self.details.setPlainText(text)
+
+    def accept(self):
+        if any(choice is None for choice in self.choices):
+            QMessageBox.information(self, _("검수 필요"), _("확인이 필요한 Strip을 선택해 검수하거나 기존 자동 결과 유지를 명시적으로 선택하세요."))
+            return
+        super().accept()
+
+
 class ReworkDateDialog(QDialog):
     def __init__(self, dates: list[str], parent=None):
         super().__init__(parent)
@@ -278,6 +369,12 @@ class GatheringModePage(QWidget):
 
     def on_finished(self, strips: list[GatherStrip], output: str, summary: dict) -> None:
         strips, output, summary = self.apply_duplicate_choices(strips, output, summary)
+        if summary.get('duplicate_review_cancelled'):
+            self.btn_start.setEnabled(True)
+            self.btn_stop.setEnabled(False)
+            self.btn_export.setEnabled(False)
+            self.result.setPlainText(_("중복 검수가 취소되어 결과를 저장하지 않았습니다."))
+            return
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_export.setEnabled(True)
@@ -291,7 +388,8 @@ class GatheringModePage(QWidget):
             f"StripID JSON 제외: {summary['excluded_strip_count']}개\n"
             f"허용수 초과 폐기/전체처리: {summary['discarded_strip_count']}개\n"
             f"중복 Strip 최신 데이터 갱신: {summary.get('replaced_strip_count', 0)}개\n"
-            f"캐시: 파일 {cache.get('file_entries', 0)}개 / 경로 {cache.get('txt_list_entries', 0)}개\n"
+            + _("중복 Strip 자동 선택 / 개별 선택") + f": {summary.get('auto_duplicate_selection_count', 0)} / {summary.get('manual_duplicate_selection_count', 0)}\n"
+            + f"캐시: 파일 {cache.get('file_entries', 0)}개 / 경로 {cache.get('txt_list_entries', 0)}개\n"
             f"{warning_text}\n"
             + output[:20000]
         )
@@ -306,32 +404,38 @@ class GatheringModePage(QWidget):
         conflicts = summary.get("duplicate_conflicts", [])
         if not conflicts:
             return strips, output, summary
+        from core.duplicate_review import build_review_plan
+        eligible = {strip.strip_id.upper() for strip in strips}
+        plan = build_review_plan([c for c in conflicts if c['strip_id'].upper() in eligible])
+        if not plan:
+            return strips, output, summary
+        dialog = GatherReviewDialog(plan, self)
+        if dialog.exec() != QDialog.Accepted:
+            return strips, output, dict(summary, duplicate_review_cancelled=True)
         strip_map = {strip.strip_id.upper(): clone_gather_strip(strip) for strip in strips}
         changed = 0
-        for index, conflict in enumerate(conflicts, start=1):
-            dialog = GatherDuplicateDialog(conflict, index, len(conflicts), self)
-            if dialog.exec() != QDialog.Accepted:
+        auto_count = 0
+        decisions = []
+        for entry, choice in zip(plan, dialog.choices):
+            decisions.append(dict(strip_id=entry['strip_id'], choice=choice, reason=entry['reason']))
+            if choice == 'auto':
                 continue
-            if dialog.choice == "auto":
-                continue
-            if dialog.choice == "merge":
-                selected = merge_gather_strips(
-                    gather_strip_from_payload(conflict["current"]),
-                    gather_strip_from_payload(conflict["candidate"]),
-                )
-            else:
-                selected = gather_strip_from_payload(conflict[dialog.choice])
+            selected = gather_strip_from_payload(entry['candidates'][choice])
             selected = self.prepare_manual_selected_strip(selected)
             strip_map[selected.strip_id.upper()] = selected
             changed += 1
+            auto_count += int(choice == entry['recommended'])
         if not changed:
-            return strips, output, summary
+            return strips, output, dict(summary, duplicate_review_decisions=decisions)
         final = sorted(strip_map.values(), key=lambda item: item.strip_id)
         new_output = build_gather_output(final, self.parent_tab.lot_in.text().strip())
         xout_counter = Counter(len(item.defect_lines) for item in final)
         new_summary = dict(summary)
-        new_summary["manual_duplicate_selection_count"] = changed
+        new_summary["manual_duplicate_selection_count"] = changed - auto_count
+        new_summary["auto_duplicate_selection_count"] = auto_count
+        new_summary["duplicate_review_decisions"] = decisions
         new_summary["total_strips"] = len(final)
+        new_summary["discarded_strip_count"] = sum(item.xout_applied for item in final)
         new_summary["xout_distribution"] = dict(sorted(xout_counter.items()))
         return final, new_output, new_summary
 
@@ -619,6 +723,10 @@ class GatheringTab(QWidget):
             if page.mode == mode:
                 strips, output, summary = page.apply_duplicate_choices(strips, output, summary)
                 break
+        if summary.get('duplicate_review_cancelled'):
+            self.batch_dialog.append_log(_("중복 검수가 취소되어 결과를 저장하지 않았습니다."))
+            self.btn_batch_export.setEnabled(True)
+            return
         lot = self.lot_in.text().strip()
         out_file = self.batch_out_dir / f"Gather_{mode}_{lot}.txt"
         out_file.write_text(output, encoding="utf-8")

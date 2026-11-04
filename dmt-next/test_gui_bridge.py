@@ -103,6 +103,25 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_sixty_ski_matching_duplicates_use_one_review_dialog(self):
+        from core.models import GatherStrip
+        from core.gather import build_gather_duplicate_conflict
+        from core.duplicate_review import build_review_plan
+        from ui.tabs.gathering_tab import GatherReviewDialog
+        conflicts=[]
+        for i in range(60):
+            key=f'S{i}'
+            strip=GatherStrip('L',key,[f'L,{key},1,1,T,OT12'])
+            conflicts.append(build_gather_duplicate_conflict(strip,strip,{}, {key:{(1,1)}}))
+        dialog=GatherReviewDialog(build_review_plan(conflicts),self.c.window)
+        dialog.show();self.app.processEvents()
+        self.assertEqual(dialog.strip_list.count(),60)
+        self.assertTrue(all(c==0 for c in dialog.choices))
+        self.action(dialog.strip_list,'list',37)
+        self.assertIn('S37',dialog.details.toPlainText())
+        self.assertEqual(len(self.c.snapshot()['dialogs']),1)
+        dialog.accept()
+        self.assertEqual(dialog.result(),W.QDialog.Accepted)
     def test_image_list_dedup_preserves_summary_and_different_directories(self):
         from core.models import DefectRecord
         from core.ivs import build_summary
@@ -274,7 +293,7 @@ class GuiTests(unittest.TestCase):
 
     def test_gather_worker_and_duplicate_selection_flow(self):
         from workers.gather_workers import GatheringWorker
-        from ui.tabs.gathering_tab import GatheringModePage,GatherDuplicateDialog
+        from ui.tabs.gathering_tab import GatheringModePage,GatherDuplicateDialog,GatherReviewDialog
         txt,_=self.fixture();second=self.root/'second.txt';second.write_text(txt.read_text().replace(',1,1,',',2,1,'))
         stamp=1700000000;os.utime(txt,(stamp,stamp));os.utime(second,(stamp+1,stamp+1))
         worker=GatheringWorker('VRS','1','unused','M','RX1234-',2,2,10,'170',set(),set())
@@ -284,8 +303,8 @@ class GuiTests(unittest.TestCase):
         tab=self.tab(3);tab.lot_in.setText('RX1234-');tab.allowance_in.setText('10');tab.x_count_in.setText('2');tab.y_count_in.setText('2')
         page=next(p for p in tab.findChildren(GatheringModePage) if p.mode=='VRS')
         def choose_merge():
-            dlg=next(w for w in self.app.topLevelWidgets() if isinstance(w,GatherDuplicateDialog) and w.isVisible())
-            self.action(dlg.radio_merge,'check',True)
+            dlg=next(w for w in self.app.topLevelWidgets() if isinstance(w,GatherReviewDialog) and w.isVisible())
+            self.action(dlg.candidate_combo,'select',dlg.candidate_combo.count()-1)
             buttons=dlg.findChild(W.QDialogButtonBox)
             self.action(buttons.button(W.QDialogButtonBox.Ok),'click')
         C.QTimer.singleShot(20,choose_merge)
