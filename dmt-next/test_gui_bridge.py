@@ -122,6 +122,35 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(self.c.snapshot()['dialogs']),1)
         dialog.accept()
         self.assertEqual(dialog.result(),W.QDialog.Accepted)
+        from ui.tabs.gathering_tab import GatheringModePage
+        page=next(w for w in self.tab(3).findChildren(GatheringModePage) if w.mode=='VRS')
+        strips=[GatherStrip('L',f'S{i}',[f'L,S{i},1,1,T,OT12']) for i in range(60)]
+        with patch.object(GatherReviewDialog,'exec',side_effect=AssertionError('Exact matches must not open review')):
+            final,output,summary=page.apply_duplicate_choices(strips,'',{'duplicate_conflicts':conflicts})
+        self.assertEqual(summary['auto_duplicate_selection_count'],60)
+        self.assertEqual(len(final),60)
+
+    def test_bulk_duplicate_selection_only_applies_checked_rows(self):
+        from core.models import GatherStrip
+        from core.gather import build_gather_duplicate_conflict
+        from core.duplicate_review import build_review_plan
+        from ui.tabs.gathering_tab import GatherReviewDialog
+        conflicts=[]
+        for key in ('A','B'):
+            strip=GatherStrip('L',key,[f'L,{key},1,1,T,OT12'])
+            other=GatherStrip('L',key,[f'L,{key},2,1,T,OT12'])
+            conflicts.append(build_gather_duplicate_conflict(strip,other,{}, {key:{(3,1)}}))
+        dialog=GatherReviewDialog(build_review_plan(conflicts),self.c.window)
+        dialog.set_checked(False)
+        dialog.strip_list.item(0).setCheckState(C.Qt.Checked)
+        dialog.apply_checked(True)
+        self.assertEqual(dialog.choices,['auto',None])
+        dialog.apply_checked(False)
+        self.assertEqual(dialog.choices,['auto',None])
+        dialog.set_checked(True)
+        dialog.apply_checked(True)
+        self.assertEqual(dialog.choices,['auto','auto'])
+        dialog.reject()
     def test_image_list_dedup_preserves_summary_and_different_directories(self):
         from core.models import DefectRecord
         from core.ivs import build_summary

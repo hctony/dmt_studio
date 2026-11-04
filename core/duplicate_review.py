@@ -27,8 +27,9 @@ def build_review_plan(conflicts):
             if set(merged_payload['defect_lines']) not in [set(p['defect_lines']) for p in candidates]:
                 candidates.append(merged_payload)
         ski, bbt = set(entry['ski_coords']), set(entry['bbt_coords'])
-        exact = [i for i, p in enumerate(candidates[:original_count]) if set(p['coords']) | bbt == ski] if ski else []
-        recommended = exact[0] if len(exact) == 1 else None
+        exact = [i for i, p in enumerate(candidates) if set(p['coords']) | bbt == ski] if ski else []
+        preferred = [i for i in exact if i < original_count] or exact
+        recommended = max(preferred, key=lambda i: (candidates[i]['source_mtime'], candidates[i]['source_order'], i)) if preferred else None
         reason = 'SKI 좌표 정확 일치' if recommended is not None else '개별 검수 필요'
         if not ski and original_count == 1:
             recommended, reason = 0, '내용 동일 (SKI 없음)'

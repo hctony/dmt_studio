@@ -18,10 +18,10 @@ class DuplicateReviewTests(unittest.TestCase):
         self.assertEqual(plan[0]['original_count'],1)
         self.assertEqual(plan[0]['candidates'][0]['source_mtime'],2)
 
-    def test_same_coords_different_codes_needs_review(self):
-        a=self.strip({(1,1)});b=self.strip({(1,1)},code='SM09')
+    def test_same_exact_coords_uses_latest_candidate_even_with_different_codes(self):
+        a=self.strip({(1,1)});b=self.strip({(1,1)},code='SM09',stamp=2)
         plan=build_review_plan([build_gather_duplicate_conflict(a,b,{}, {'S':{(1,1)}})])
-        self.assertIsNone(plan[0]['recommended'])
+        self.assertEqual(plan[0]['recommended'],1)
 
     def test_all_versions_of_strip_grouped_and_only_exact_selected(self):
         a=self.strip({(1,1)});b=self.strip({(2,1)});c=self.strip({(3,1)})
@@ -35,3 +35,8 @@ class DuplicateReviewTests(unittest.TestCase):
         a=self.strip({(1,1)});b=self.strip({(2,1)})
         plan=build_review_plan([build_gather_duplicate_conflict(a,b,{}, {'S':{(1,1),(2,1),(3,1)}})])
         self.assertIsNone(plan[0]['recommended'])
+
+    def test_exact_merge_is_automatic_when_no_original_candidate_matches(self):
+        a=self.strip({(1,1)});b=self.strip({(2,1)})
+        plan=build_review_plan([build_gather_duplicate_conflict(a,b,{}, {'S':{(1,1),(2,1)}})])
+        self.assertEqual(plan[0]['recommended'],2)

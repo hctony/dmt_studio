@@ -128,10 +128,23 @@ class GatherReviewDialog(QDialog):
         layout = QVBoxLayout(self)
         self.overview = QLabel()
         layout.addWidget(self.overview)
-        layout.addWidget(QLabel(_("목록에서 원하는 Strip만 선택해 검수하세요. 좌표가 같아도 불량 코드가 다르면 확인이 필요합니다.")))
+        layout.addWidget(QLabel(_("SKI 정확 일치는 자동 처리합니다. 일치 후보가 여러 개면 최신 데이터를 선택합니다.")))
         self.strip_list = QListWidget()
         self.strip_list.currentRowChanged.connect(self.show_strip)
+        self.strip_list.itemChanged.connect(self.refresh_status)
         layout.addWidget(self.strip_list)
+        bulk = QHBoxLayout()
+        self.btn_select_all = QPushButton(_("전체 선택"))
+        self.btn_clear_all = QPushButton(_("전체 선택 해제"))
+        self.btn_apply_ski = QPushButton(_("선택 항목 SKI 자동 적용"))
+        self.btn_keep_auto = QPushButton(_("선택 항목 기존 결과 유지"))
+        self.btn_select_all.clicked.connect(lambda: self.set_checked(True))
+        self.btn_clear_all.clicked.connect(lambda: self.set_checked(False))
+        self.btn_apply_ski.clicked.connect(lambda: self.apply_checked(False))
+        self.btn_keep_auto.clicked.connect(lambda: self.apply_checked(True))
+        for button in (self.btn_select_all,self.btn_clear_all,self.btn_apply_ski,self.btn_keep_auto):
+            bulk.addWidget(button)
+        layout.addLayout(bulk)
         self.candidate_combo = QComboBox()
         self.candidate_combo.currentIndexChanged.connect(self.choose)
         layout.addWidget(self.candidate_combo)
@@ -143,16 +156,41 @@ class GatherReviewDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         for entry in plan:
-            self.strip_list.addItem(entry['strip_id'])
+            item = QListWidgetItem(entry['strip_id'])
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.strip_list.addItem(item)
         self.refresh_status()
         self.strip_list.setCurrentRow(next((i for i, c in enumerate(self.choices) if c is None), 0))
 
-    def refresh_status(self):
+    def set_checked(self, checked):
+        self.strip_list.blockSignals(True)
+        for i in range(self.strip_list.count()):
+            self.strip_list.item(i).setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.strip_list.blockSignals(False)
+        self.refresh_status()
+
+    def apply_checked(self, keep_existing):
+        for i, entry in enumerate(self.plan):
+            if self.strip_list.item(i).checkState() != Qt.Checked:
+                continue
+            if keep_existing:
+                self.choices[i] = 'auto'
+            elif entry['recommended'] is not None and entry['reason'] == 'SKI 좌표 정확 일치':
+                self.choices[i] = entry['recommended']
+        self.refresh_status()
+        self.show_strip(self.strip_list.currentRow())
+
+    def refresh_status(self, *args):
         pending = sum(c is None for c in self.choices)
         self.overview.setText(_("전체 / 확인 필요") + f": {len(self.plan)} / {pending}")
+        self.strip_list.blockSignals(True)
         for i, entry in enumerate(self.plan):
+            if i >= self.strip_list.count():
+                continue
             status = _("검수 필요") if self.choices[i] is None else entry['reason'] if self.choices[i] == entry['recommended'] else _("개별 선택 완료")
             self.strip_list.item(i).setText(f"{entry['strip_id']} | {status}")
+        self.strip_list.blockSignals(False)
 
     def show_strip(self, row):
         if row < 0:
@@ -409,14 +447,18 @@ class GatheringModePage(QWidget):
         plan = build_review_plan([c for c in conflicts if c['strip_id'].upper() in eligible])
         if not plan:
             return strips, output, summary
-        dialog = GatherReviewDialog(plan, self)
-        if dialog.exec() != QDialog.Accepted:
-            return strips, output, dict(summary, duplicate_review_cancelled=True)
+        if all(entry['recommended'] is not None and entry['reason'] == 'SKI 좌표 정확 일치' for entry in plan):
+            choices = [entry['recommended'] for entry in plan]
+        else:
+            dialog = GatherReviewDialog(plan, self)
+            if dialog.exec() != QDialog.Accepted:
+                return strips, output, dict(summary, duplicate_review_cancelled=True)
+            choices = dialog.choices
         strip_map = {strip.strip_id.upper(): clone_gather_strip(strip) for strip in strips}
         changed = 0
         auto_count = 0
         decisions = []
-        for entry, choice in zip(plan, dialog.choices):
+        for entry, choice in zip(plan, choices):
             decisions.append(dict(strip_id=entry['strip_id'], choice=choice, reason=entry['reason']))
             if choice == 'auto':
                 continue
