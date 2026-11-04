@@ -133,6 +133,14 @@ class IvsStudioTab(QWidget):
         self.defect_list = QListWidget()
         self.defect_list.itemSelectionChanged.connect(self.on_record_selected)
         left_lay.addWidget(self.defect_list)
+        navigation = QHBoxLayout()
+        self.btn_image_prev = QPushButton(_("A 이전 이미지"))
+        self.btn_image_next = QPushButton(_("D 다음 이미지"))
+        self.btn_image_prev.clicked.connect(lambda: self.step_image(-1))
+        self.btn_image_next.clicked.connect(lambda: self.step_image(1))
+        navigation.addWidget(self.btn_image_prev)
+        navigation.addWidget(self.btn_image_next)
+        left_lay.addLayout(navigation)
         splitter.addWidget(left)
 
         right = QWidget()
@@ -142,6 +150,7 @@ class IvsStudioTab(QWidget):
         self.image_labels = []
         for title in ("Sub2", "Main", "Sub1"):
             label = QLabel(title)
+            label.setProperty('dmt_image_slot', len(self.image_labels))
             label.setAlignment(Qt.AlignCenter)
             label.setMinimumSize(240, 220)
             label.setStyleSheet("border: 1px solid #777;")
@@ -326,12 +335,29 @@ class IvsStudioTab(QWidget):
             self.filtered_records = [r for r in self.records if r.ivs_1 == code]
         else:
             self.filtered_records = list(self.records)
+        from core.nas import normalize_remote_path
+        grouped = {}
+        for index, record in enumerate(self.filtered_records):
+            paths = tuple(sorted({normalize_remote_path(p) for p in record.images if p.strip()}))
+            key = ('images', paths) if paths else ('record', index)
+            grouped.setdefault(key, []).append(record)
+        self.image_record_groups = list(grouped.values())
+        self.filtered_records = [group[0] for group in self.image_record_groups]
         self.defect_list.clear()
         for record in self.filtered_records:
             self.defect_list.addItem(QListWidgetItem(
                 f"[{record.ivs_1}] {record.strip_id} {record.container} U{record.unit_idx} "
                 f"{record.face} p{record.img_merge_idx} ({record.machine}/{record.trial}/{record.strip_folder})"
             ))
+
+    def step_image(self, direction: int) -> None:
+        count = self.defect_list.count()
+        if not count:
+            return
+        row = self.defect_list.currentRow()
+        target = (0 if direction > 0 else count - 1) if row < 0 else max(0, min(count - 1, row + direction))
+        self.defect_list.setCurrentRow(target)
+        self.defect_list.setProperty('dmt_image_page', target // 200 * 200)
 
     def search_strip_images(self) -> None:
         strip_id = self.strip_search_in.text().strip().upper()
@@ -439,7 +465,12 @@ class IvsStudioTab(QWidget):
         if row < 0 or row >= len(self.filtered_records):
             return
         record = self.filtered_records[row]
-        self.info.setPlainText(json.dumps(asdict(record), ensure_ascii=False, indent=2))
+        details = asdict(record)
+        groups = getattr(self, 'image_record_groups', [])
+        if row < len(groups) and len(groups[row]) > 1:
+            details['image_record_count'] = len(groups[row])
+            details['image_records'] = [asdict(item) for item in groups[row]]
+        self.info.setPlainText(json.dumps(details, ensure_ascii=False, indent=2))
         if not record.images:
             for label in self.image_labels:
                 label.setText(_("저장된 이미지 경로 없음"))
@@ -455,7 +486,9 @@ class IvsStudioTab(QWidget):
                         self.on_record_selected()
                 QTimer.singleShot(100, retry)
             return
-        self.loader_thread = ImageLoaderThread(record.images)
+        from core.nas import normalize_remote_path
+        unique_paths = list(dict.fromkeys(normalize_remote_path(path) for path in record.images if path.strip()))
+        self.loader_thread = ImageLoaderThread(unique_paths)
         self._image_started_request = request
         self.loader_thread.finished.connect(lambda paths, images: self.on_images_loaded(paths, images) if request == self._image_request else None)
         self.loader_thread.failed.connect(lambda msg: self.on_image_load_failed(msg) if request == self._image_request else None)

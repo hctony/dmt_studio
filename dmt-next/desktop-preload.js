@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('studio',{
   connection:()=>ipcRenderer.invoke('settings:connection-read'),
   saveConnection:values=>ipcRenderer.invoke('settings:connection-save',values),
   snapshot:()=>ipcRenderer.invoke('gui:snapshot'),
+  stepImage:direction=>ipcRenderer.invoke('gui:image-step',direction),
   retryBackend:()=>ipcRenderer.invoke('backend:retry'),
   backendStatus:()=>ipcRenderer.invoke('backend:status'),
   action:args=>ipcRenderer.invoke('gui:action',args),

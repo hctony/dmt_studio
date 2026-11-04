@@ -103,6 +103,24 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_image_list_dedup_preserves_summary_and_different_directories(self):
+        from core.models import DefectRecord
+        from core.ivs import build_summary
+        from dataclasses import replace
+        tab=self.tab(0)
+        record=DefectRecord('S','A','M','L','T','1','Unit','T','1','0','SM03','SM03','','F',1,1,0,0,'xml',['/one/p1.bmp'])
+        tab.records=[record,replace(record,source_xml='other.xml'),replace(record,unit_idx='2',images=['/two/p1.bmp'])]
+        before=build_summary(tab.records)
+        tab.refresh_view()
+        self.assertEqual(tab.defect_list.count(),2)
+        self.assertEqual([len(group) for group in tab.image_record_groups],[2,1])
+        self.assertEqual(build_summary(tab.records),before)
+        with patch('ui.tabs.ivs_tab.ImageLoaderThread') as loader:
+            loader.return_value.isRunning.return_value=False
+            for direction,expected in [(1,0),(1,1),(1,1),(-1,0),(-1,0)]:
+                self.c.handle({'id':71,'method':'gui.image-step','args':{'direction':direction}})
+                self.assertEqual(tab.defect_list.currentRow(),expected)
+            self.assertEqual(json.loads(tab.info.toPlainText())['image_record_count'],2)
     def test_gathering_lot_input_auto_and_lookup_all_resolve_legacy_paths(self):
         from ui.common_widgets import finish_line_edit_lot_lookup
         tab=self.tab(3)

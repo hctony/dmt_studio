@@ -43,6 +43,7 @@ app.whenReady().then(async()=>{
   });
   ipcMain.handle('ui:language',(_e,value)=>{language=value==='zh-TW'?'zh-TW':'ko';lifecycle?.setLanguage(language);});
   ipcMain.handle('gui:snapshot',()=>gui.call('gui.snapshot'));
+  ipcMain.handle('gui:image-step',(_e,direction)=>gui.call('gui.image-step',{direction:direction===-1?-1:1}));
   ipcMain.handle('backend:retry',()=>{if(gui.busy||gui.pending.size||gui.updating)throw new Error('BACKEND_BUSY');return gui.retry();});
   ipcMain.handle('backend:status',()=>({error:gui.failure?.message||null}));
   ipcMain.handle('gui:action',(_e,args)=>gui.call('gui.action',args));

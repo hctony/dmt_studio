@@ -167,7 +167,7 @@ class Controller(C.QObject):
                     data=C.QByteArray(); buffer=C.QBuffer(data); buffer.open(C.QIODevice.WriteOnly); pix.save(buffer,'PNG')
                     cached=(pix.cacheKey(),'data:image/png;base64,'+base64.b64encode(bytes(data)).decode())
                     self.pixmaps[key]=cached
-                return dict(d,type='image',src=cached[1])
+                return dict(d,type='image',src=cached[1],imageSlot=w.property('dmt_image_slot'))
             return dict(d,type='label',text=w.text())
         if isinstance(w,W.QTextEdit): return dict(d,type='text',text=w.toPlainText(),readonly=w.isReadOnly())
         if isinstance(w,W.QProgressBar): return dict(d,type='progress',value=w.value(),max=w.maximum())
@@ -177,6 +177,10 @@ class Controller(C.QObject):
                 rows.append([w.item(r,c).text() if w.item(r,c) else '' for c in range(w.columnCount())])
             return dict(d,type='table',start=start,total=w.rowCount(),headers=[w.horizontalHeaderItem(c).text() if w.horizontalHeaderItem(c) else str(c+1) for c in range(w.columnCount())],rows=rows,selected=w.currentRow(),sortable=w.isSortingEnabled(),sortColumn=w.horizontalHeader().sortIndicatorSection(),sortDescending=w.horizontalHeader().sortIndicatorOrder()==C.Qt.DescendingOrder)
         if isinstance(w,W.QListWidget):
+            requested_page=w.property('dmt_image_page')
+            if requested_page is not None:
+                self.pages[key]=requested_page
+                w.setProperty('dmt_image_page',None)
             start=self.pages.get(key,0); start=min(start,max(0,((w.count()-1)//200)*200)); rows=[]
             for r in range(start,min(start+200,w.count())):
                 item=w.item(r); rows.append({'text':item.text(),'checked':item.checkState()==C.Qt.Checked,'checkable':bool(item.flags()&C.Qt.ItemIsUserCheckable),'selected':item.isSelected()})
@@ -209,6 +213,13 @@ class Controller(C.QObject):
                 if record: record['value']=a.get('value');record['loop'].quit()
                 result=True
             elif method=='gui.snapshot': result=self.snapshot()
+            elif method=='gui.image-step':
+                tabs=self.window.centralWidget()
+                if tabs.currentIndex()==0 and not self.waiters and not any(isinstance(w,W.QDialog) and w.isVisible() for w in self.app.topLevelWidgets()):
+                    tab=tabs.widget(0)
+                    tab.step_image(1 if a.get('direction',1)>0 else -1)
+                    self.pages[self.register(tab.defect_list)]=max(0,tab.defect_list.currentRow()//200)*200
+                result=True
             elif method.startswith('workflow.'):
                 result=self.workflow.handle(method.split('.',1)[1],a)
             elif method=='gui.reload-models':
