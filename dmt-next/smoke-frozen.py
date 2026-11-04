@@ -10,6 +10,7 @@ root = Path(__file__).resolve().parent
 backend = Path(sys.argv[1]).resolve() if len(sys.argv)>1 else root/'backend-dist/dmt-service/dmt-service.exe'
 for relative in ['_internal/shiboken6/Shiboken.pyd','_internal/shiboken6/shiboken6.abi3.dll','_internal/PySide6/QtCore.pyd','_internal/PySide6/QtGui.pyd','_internal/PySide6/QtWidgets.pyd']:
     assert (backend.parent/relative).is_file(), relative
+assert (backend.parent/'_internal/resources/templates/report.xlsx').is_file(), 'Bundled report template missing'
 with tempfile.TemporaryDirectory() as data:
     requests = [{'id':1,'method':'gui.snapshot'}, {'id':2,'method':'workflow.status'},
         {'id':3,'method':'gui.import-models','args':{'data':{'PACKAGED-TEST':{'units_per_strip':'88','xout_limit':'18','vrs_txt_paths':r'Z:\Taiwan\LOT.txt','ski_path':''}}}},

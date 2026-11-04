@@ -49,6 +49,10 @@ def export_report_to_2xlsx(
         return {"success": False, "error": _("openpyxl 라이브러리가 필요합니다. 'pip install openpyxl'을 실행하세요.")}
 
     use_template = bool(template_path and os.path.exists(template_path))
+    if template_path and not use_template:
+        return {"success": False, "error": _("템플릿 파일이 존재하지 않습니다.")}
+    if use_template and Path(template_path).resolve() == Path(output_path).resolve():
+        return {"success": False, "error": _("템플릿 원본에 덮어쓸 수 없습니다. 다른 저장 위치를 선택하세요.")}
 
     try:
         today = date.today()
@@ -83,12 +87,15 @@ def export_report_to_2xlsx(
             # ── 템플릿 모드: 기존 2.xlsx 로드 ────────────────────────────────
             wb = load_workbook(template_path)
             ws = wb.active
+            from copy import copy
+            template_styles = {row: copy(ws.cell(row, DEFECT_START_COL)._style) for row in (1, 2, 3)}
+            template_widths = {str(ws.cell(1, col).value).strip().upper(): ws.column_dimensions[get_column_letter(col)].width for col in range(DEFECT_START_COL, ws.max_column+1)}
 
             ws["A3"] = f"{today.month}/{today.strftime('%d/%Y')}"
             ws["B3"] = _week_of_month(today)
             ws["C3"] = None
             ws["D3"] = model_name
-            ws["E3"] = None
+            ws["E3"] = lot_id
             ws["F3"] = total_units
             ws["G3"] = ok_units
             ws["H3"] = ng_units
@@ -131,6 +138,8 @@ def export_report_to_2xlsx(
                     insert_at = header_to_col_after[code.upper()] + 1
                     continue
                 ws.insert_cols(insert_at)
+                for row, style in template_styles.items():
+                    ws.cell(row, insert_at)._style = copy(style)
                 ws.cell(row=1, column=insert_at).value = code
                 ws.cell(row=3, column=insert_at).value = cnt
                 for k in list(header_to_col_after.keys()):
@@ -138,6 +147,10 @@ def export_report_to_2xlsx(
                         header_to_col_after[k] += 1
                 header_to_col_after[code.upper()] = insert_at
                 insert_at += 1
+
+            for code, col in header_to_col_after.items():
+                if col >= DEFECT_START_COL:
+                    ws.column_dimensions[get_column_letter(col)].width = template_widths.get(code, 14)
 
         else:
             # ── 템플릿 없음: 새 워크북 생성 ──────────────────────────────────
@@ -199,7 +212,8 @@ def export_report_to_2xlsx(
                 high_rate.append(f"{code} {pct}%")
         ws["H7"] = ", ".join(high_rate) if high_rate else _("없음")
 
-        _autofit_columns(ws)
+        if not use_template:
+            _autofit_columns(ws)
         wb.save(output_path)
 
         return {

@@ -181,6 +181,9 @@ class YieldTab(QWidget):
         self.btn_export_excel = QPushButton(_("성적서 엑셀 내보내기"))
         self.btn_export_excel.clicked.connect(self.export_excel)
         action_row.addWidget(self.btn_export_excel)
+        self.btn_report_template = QPushButton(_("성적서 템플릿 변경"))
+        self.btn_report_template.clicked.connect(self.choose_report_template)
+        action_row.addWidget(self.btn_report_template)
         action_row.addStretch()
         layout.addLayout(action_row)
 
@@ -588,33 +591,28 @@ class YieldTab(QWidget):
         Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         QMessageBox.information(self, _("저장 완료"), path)
 
+    def choose_report_template(self) -> None:
+        path, _ext = QFileDialog.getOpenFileName(self, _("성적서 템플릿 선택"), "", "Excel Files (*.xlsx)")
+        if not path:
+            return
+        from core.report_templates import remember_template
+        try:
+            remember_template(path)
+            QMessageBox.information(self, _("저장 완료"), _("성적서 템플릿을 저장했습니다. 다음부터 자동으로 사용합니다."))
+        except Exception as exc:
+            QMessageBox.critical(self, _("템플릿 오류"), str(exc))
+
     def export_excel(self) -> None:
         if not self.summary:
             QMessageBox.warning(self, _("저장 없음"), _("먼저 수율 계산을 실행하세요."))
             return
 
-        # 2.xlsx 템플릿 자동 탐색: 실행 파일 기준 디렉터리 → 현재 작업 디렉터리
-        import sys
-        from pathlib import Path as _Path
-        _base_dirs = [
-            _Path(sys.argv[0]).parent,
-            _Path.cwd(),
-        ]
-        template_path: str = ""
-        for _bd in _base_dirs:
-            _candidate = _bd / "2.xlsx"
-            if _candidate.exists():
-                template_path = str(_candidate)
-                break
-
-        # 템플릿 없으면 수동 선택 제안 (취소해도 템플릿 없이 계속 진행)
-        if not template_path:
-            template_path, _ext = QFileDialog.getOpenFileName(
-                self,
-                _("성적서 템플릿(2.xlsx) 선택 — 취소 시 템플릿 없이 생성"),
-                "",
-                "Excel Files (*.xlsx)",
-            )
+        from core.report_templates import resolve_template
+        try:
+            template_path = resolve_template()
+        except Exception as exc:
+            QMessageBox.critical(self, _("템플릿 오류"), str(exc))
+            return
 
         lot = str(self.summary.get("lot_id", "yield_summary")).strip() or "yield_summary"
         output_path, _ext = QFileDialog.getSaveFileName(
