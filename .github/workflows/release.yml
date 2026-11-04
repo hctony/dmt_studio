@@ -28,6 +28,17 @@ jobs:
             dmt-next/release/*.exe
             dmt-next/release/*.blockmap
             dmt-next/release/latest.yml
+      - name: Prepare draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          gh release view $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --draft --verify-tag --title "DMT Analysis Studio $env:GITHUB_REF_NAME" --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not prepare release' }
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish draft
         if: startsWith(github.ref, 'refs/tags/v')
         run: npx electron-builder --win --publish always
