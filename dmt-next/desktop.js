@@ -2,6 +2,9 @@ const {app,BrowserWindow,ipcMain,dialog,shell} = require('electron');
 const fs=require('node:fs/promises');const path=require('node:path');
 const {GuiClient}=require('./gui-client');const {installUpdater}=require('./updater');
 let win,gui;
+const primaryInstance=app.requestSingleInstanceLock();
+if(!primaryInstance)app.quit();
+app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
 let language='ko';const translations=require('./ui/translations.json');
 let recentPaths={};
 function translate(s){if(language==='ko')return s;let value=translations[s]||s;for(const key of Object.keys(translations).filter(k=>k.length>3).sort((a,b)=>b.length-a.length)){value=value.split(key).join(translations[key]);}return value;}
@@ -21,6 +24,7 @@ async function onEvent(m){
   }else if(win&&!win.isDestroyed())win.webContents.send('gui:event',m);
 }
 app.whenReady().then(async()=>{
+  if(!primaryInstance)return;
   await fs.mkdir(app.getPath('userData'),{recursive:true});
   try{recentPaths=JSON.parse(await fs.readFile(path.join(app.getPath('userData'),'dialog-paths.json'),'utf8'));}catch{}
   gui=new GuiClient(onEvent);
@@ -34,10 +38,12 @@ app.whenReady().then(async()=>{
     const port=Number(current.DMT_NAS_PORT);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid NAS port');
     const dest=path.join(app.getPath('userData'),'.env');let other='';try{other=(await fs.readFile(dest,'utf8')).split(/\r?\n/).filter(line=>!connectionKeys.includes(line.split('=')[0].trim())).join('\n');}catch(e){if(e.code!=='ENOENT')throw e;}
     await fs.writeFile(dest+'.tmp',other+'\n'+connectionKeys.map(key=>`${key}=${current[key]||''}`).join('\n'));await fs.rename(dest+'.tmp',dest);
-    gui.close();gui.start();return true;
+    await gui.retry();return true;
   });
   ipcMain.handle('ui:language',(_e,value)=>{language=value==='zh-TW'?'zh-TW':'ko';});
   ipcMain.handle('gui:snapshot',()=>gui.call('gui.snapshot'));
+  ipcMain.handle('backend:retry',()=>{if(gui.busy||gui.pending.size||gui.updating)throw new Error('BACKEND_BUSY');return gui.retry();});
+  ipcMain.handle('backend:status',()=>({error:gui.failure?.message||null}));
   ipcMain.handle('gui:action',(_e,args)=>gui.call('gui.action',args));
   ipcMain.handle('gui:reply',(_e,args)=>gui.call('dialog.reply',args));
   ipcMain.handle('workflow:call',(_e,method,args={})=>{
@@ -64,7 +70,7 @@ app.whenReady().then(async()=>{
   });
   installUpdater(app,ipcMain,()=>gui.busy||gui.pending.size>0,{
     onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('update:state',state);},
-    beforeInstall:()=>{gui.updating=true;},
+    beforeInstall:()=>gui.stopForUpdate(),
     onInstallError:()=>{gui.updating=false;}
   });
   win=new BrowserWindow({width:1500,height:1000,minWidth:900,minHeight:650,backgroundColor:'#f3f6fb',title:'DMT Analysis Studio',webPreferences:{preload:path.join(__dirname,'desktop-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:!app.isPackaged&&process.env.DMT_HEADLESS==='1'}});

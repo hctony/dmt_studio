@@ -3,7 +3,8 @@ function installUpdater(app, ipcMain, isBusy, options = {}) {
   let state = { status: app.isPackaged ? 'idle' : 'development', version: app.getVersion() };
   const publish = patch => {state = {...state, ...patch}; options.onState?.({...state}); return state;};
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Installation is allowed only through the explicit update/restart action.
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.autoRunAppAfterInstall = true;
   autoUpdater.allowDowngrade = false;
   autoUpdater.allowPrerelease = false;
@@ -11,19 +12,22 @@ function installUpdater(app, ipcMain, isBusy, options = {}) {
   autoUpdater.on('update-available', info => publish({status:'downloading', available:info.version, progress:0}));
   autoUpdater.on('update-not-available', () => publish({status:'current', progress:0, available:null}));
   autoUpdater.on('download-progress', info => publish({progress:Math.round(info.percent)}));
-  autoUpdater.on('update-downloaded', info => publish({status:'ready', available:info.version, progress:100}));
+  autoUpdater.on('update-downloaded', info => publish(info.version===app.getVersion()
+    ? {status:'current', available:null, progress:0}
+    : {status:'ready', available:info.version, progress:100}));
   const failed = error => {options.onInstallError?.(); publish({status:'error', error:error.message});};
   autoUpdater.on('error', failed);
   const status = () => ({...state, busy:!!isBusy()});
   const check = async () => { if (app.isPackaged && !['checking','downloading','ready','installing'].includes(state.status)) { try { await autoUpdater.checkForUpdates(); } catch (error) { failed(error); } } return status(); };
   ipcMain.handle('update:status', status);
   ipcMain.handle('update:check', check);
-  ipcMain.handle('update:install', () => {
+  ipcMain.handle('update:install', async () => {
     if (state.status !== 'ready') throw new Error('UPDATE_NOT_READY');
     if (isBusy()) throw new Error('UPDATE_BUSY');
     publish({status:'installing'});
     try {
-      options.beforeInstall?.();
+      await options.beforeInstall?.();
+      if(state.status!=='installing')throw new Error('UPDATE_ABORTED');
       // NSIS /S + --force-run: install silently and reopen the updated app.
       autoUpdater.quitAndInstall(true, true);
     } catch (error) { failed(error); throw error; }

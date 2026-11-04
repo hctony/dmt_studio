@@ -11,6 +11,7 @@ files:
   - ui/studio.js
   - ui/workflow.js
   - ui/update-dialog.js
+  - ui/backend-recovery.js
   - ui/studio.css
   - ui/translations.js
   - ui/translations.json

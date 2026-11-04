@@ -20,9 +20,11 @@ jobs:
       - run: npm ci
         working-directory: dmt-next
       - run: python -m unittest discover -s dmt-next -p 'test_*.py'
-      - run: node --test dmt-next/test-updater.cjs
+      - run: node --test dmt-next/test-updater.cjs dmt-next/test-gui-client.cjs
       - run: ./dmt-next/build.ps1
       - run: python dmt-next/smoke-frozen.py
+      - run: python dmt-next/smoke-frozen.py dmt-next/release/win-unpacked/resources/backend/dmt-service.exe
+      - run: ./dmt-next/smoke-install.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
@@ -43,7 +45,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish draft
         if: startsWith(github.ref, 'refs/tags/v')
-        run: npx electron-builder --win --publish always
+        shell: pwsh
+        run: |
+          $stage = Join-Path $PWD 'release/publish'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          @("DMT Analysis Studio Setup $version.exe", "DMT Analysis Studio Setup $version.exe.blockmap", 'latest.yml') | ForEach-Object {
+            Copy-Item -LiteralPath (Join-Path 'release' $_) -Destination (Join-Path $stage $_.Replace(' ','-'))
+          }
+          $assets = @(Get-ChildItem $stage -File | ForEach-Object { $_.FullName })
+          gh release upload $env:GITHUB_REF_NAME @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
         working-directory: dmt-next
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
