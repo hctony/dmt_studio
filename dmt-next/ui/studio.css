@@ -7,3 +7,5 @@
 .image{cursor:zoom-in}.image-original{display:block;max-width:none;height:auto}
 
 .yield-guide{margin-bottom:18px;padding:18px;border:1px solid #cfdfef;border-radius:12px;background:#fff}.yield-guide[hidden]{display:none}.yield-steps{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}.yield-steps button{color:#345475;background:#edf3fa}.yield-steps .current-step{background:#2674c5;color:white}.step-arrow{color:#71849a}.yield-guide p{color:#526b85;line-height:1.6}.yield-guide .next-step{color:#1764b2;border:1px solid #bdd5ef}
+
+.inspection-split{display:grid;grid-template-columns:minmax(260px,32%) minmax(0,1fr);align-items:start;gap:20px}.inspection-images>.row{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}.inspection-images .image{display:block;width:100%;height:clamp(360px,55vh,680px);object-fit:contain;background:#e8eef5;padding:8px}.inspection-images>.row>.label{min-height:180px;display:grid;place-items:center;border:1px dashed #bdcddd;border-radius:10px;background:#edf3fa}@media(max-width:1100px){.inspection-split{grid-template-columns:minmax(0,1fr)}.inspection-images .image{height:clamp(320px,60vh,680px)}}

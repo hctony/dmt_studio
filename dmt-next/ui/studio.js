@@ -29,6 +29,7 @@ function render(w){
  case 'tree':{n=el('div','list');const make=item=>{const box=el('div','tree-group');const line=el('button','',item.text.map(t).join('  |  '));line.onclick=()=>action(w.id,'tree',null,{route:item.route});box.append(line);item.children.forEach(c=>box.append(make(c)));return box;};w.rows.forEach(r=>n.append(make(r)));break;}
  default:{n=el('div',w.type==='group'?'group':w.type==='layout'?(w.direction==='row'?'row':'column'):'container');if(w.title)n.append(el('h2','',t(w.title)));const children=w.form?el('div','form'):w.horizontal?el('div','row'):n;(w.children||[]).filter(Boolean).forEach(c=>{const child=render(c);if(w.form&&c.formRole===2)child.classList.add('form-full');children.append(child);});if(children!==n)n.append(children);}
  }
+ if(w.presentation)n.classList.add(w.presentation);
  if(w.id)n.dataset.key=w.id;return n;
 }
 function modal(title,content,onClose){const overlay=el('div','overlay');const box=el('section','modal');box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');const head=el('div','modal-head');head.append(el('h2','',t(title)));if(onClose){const close=el('button','','×');close.setAttribute('aria-label',tr('닫기','關閉'));close.onclick=onClose;head.append(close);}box.append(head,content);overlay.append(box);return overlay;}

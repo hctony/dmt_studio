@@ -152,7 +152,7 @@ class Controller(C.QObject):
 
     def widget(self,w):
         if w is None or w.isHidden(): return None
-        key=self.register(w); d={'id':key,'enabled':w.isEnabled(),'type':'container'}
+        key=self.register(w); d={'id':key,'enabled':w.isEnabled(),'type':'container','presentation':w.property('dmt_presentation') or ''}
         if isinstance(w,W.QTabWidget):
             return dict(d,type='tabs',index=w.currentIndex(),labels=[w.tabText(i) for i in range(w.count())],content=self.widget(w.currentWidget()))
         if isinstance(w,W.QLineEdit): return dict(d,type='input',value=w.text(),placeholder=w.placeholderText(),readonly=w.isReadOnly())

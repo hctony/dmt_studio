@@ -110,6 +110,7 @@ class IvsStudioTab(QWidget):
         root.addWidget(search_box)
 
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setProperty('dmt_presentation', 'inspection-split')
         left = QWidget()
         left_lay = QVBoxLayout(left)
         self.summary_label = QLabel(_("대기 중"))
@@ -135,6 +136,7 @@ class IvsStudioTab(QWidget):
         splitter.addWidget(left)
 
         right = QWidget()
+        right.setProperty('dmt_presentation', 'inspection-images')
         right_lay = QVBoxLayout(right)
         image_row = QHBoxLayout()
         self.image_labels = []
