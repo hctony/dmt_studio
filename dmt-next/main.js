@@ -19,6 +19,14 @@ function call(command, input) {
 }
 app.whenReady().then(() => {
   let originalWindow;
+  app.on('before-quit', event => {
+    if (legacy.pending.size > 0 || originalWindow) {
+      event.preventDefault();
+      dialog.showMessageBoxSync({type:'info',message:'작업과 기존 기능 창을 종료한 뒤 다시 종료하세요. / 請先完成工作並關閉原有功能視窗。'});
+      return;
+    }
+    legacy.close();
+  });
   ipcMain.handle('legacy:open', () => {
     if (originalWindow) return;
     const executable = app.isPackaged ? path.join(process.resourcesPath,'backend','dmt-service.exe') : process.env.DMT_PYTHON || 'python';
@@ -63,4 +71,3 @@ app.whenReady().then(() => {
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => legacy.close());
