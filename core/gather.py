@@ -216,19 +216,21 @@ def build_gather_duplicate_conflict(
 # File parsing with cache
 # ---------------------------------------------------------------------------
 
-def parse_gather_file(path: Path, lot: str) -> dict[str, GatherStrip]:
+def parse_gather_file(path: Path, lot: str, stats: dict | None = None) -> dict[str, GatherStrip]:
     try:
         stat_info = path.stat()
         source_mtime = stat_info.st_mtime
-        cache_key = (str(path), stat_info.st_mtime, stat_info.st_size, lot.strip().upper(), "v2")
+        cache_key = (str(path), stat_info.st_mtime_ns, stat_info.st_size, lot.strip().upper(), stat_info.st_ctime_ns)
         cached = GATHER_FILE_CACHE.get(cache_key)
         if cached is not None:
+            if stats is not None: stats['memory_hits'] = stats.get('memory_hits', 0) + 1
             return cached
     except OSError:
         return {}
 
     result: dict[str, GatherStrip] = {}
-    lines = read_text_lines(path)
+    from core.gather_index import read_indexed_lines
+    lines = read_indexed_lines(path, stat_info, lot, read_text_lines, stats)
     current_lot = ""
     current_strip = ""
     current_lines: list[str] = []
@@ -303,12 +305,28 @@ def parse_gather_file(path: Path, lot: str) -> dict[str, GatherStrip]:
     return result
 
 
-def cached_txt_files(path: Path) -> list[Path]:
+def cached_txt_files(path: Path, lookback_days: int = 0, stats: dict | None = None, recursive: bool = True) -> list[Path]:
+    import os, time
+    from core.gather_index import recent_file
     try:
         # Descendant directory changes do not update the root's timestamp.
         # Re-enumerate metadata; the expensive TXT parsing remains cached separately.
-        files = list(path.rglob("*.txt"))
-        stamps = {item: item.stat() for item in files}
+        stamps = {}
+        pending = [path]
+        cutoff = time.time() - lookback_days * 86400 if lookback_days else None
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        if recursive: pending.append(Path(entry.path))
+                    elif entry.name.lower().endswith('.txt') and entry.is_file():
+                        info = entry.stat()
+                        if cutoff is not None and not recent_file(info, cutoff):
+                            if stats is not None: stats['old_skipped'] = stats.get('old_skipped', 0) + 1
+                            continue
+                        stamps[Path(entry.path)] = info
+        files = list(stamps)
         cache_key = (str(path), tuple(sorted((str(item), info.st_mtime_ns, info.st_size) for item, info in stamps.items())))
         cached = GATHER_TXT_LIST_CACHE.get(cache_key)
         if cached is not None:
@@ -323,24 +341,25 @@ def cached_txt_files(path: Path) -> list[Path]:
     return files
 
 
-def find_parent_gather_hits(path: Path, lot: str, max_hits: int = 20, direct_only: bool = False) -> list[str]:
+def find_parent_gather_hits(path: Path, lot: str, max_hits: int = 20, direct_only: bool = False, lookback_days: int = 0, stats: dict | None = None) -> list[str]:
     parent = path.parent
     if not parent or parent == path or not parent.exists():
         return []
     hits: list[str] = []
     try:
-        txt_files = (
-            sorted(parent.glob("*.txt"), key=lambda item: (item.stat().st_mtime, str(item)))
-            if direct_only
-            else cached_txt_files(parent)
-        )
+        txt_files = cached_txt_files(parent, lookback_days, stats, recursive=not direct_only)
     except OSError:
         return []
     for txt_file in txt_files:
         if path in txt_file.parents:
             continue
         try:
-            parsed = parse_gather_file(txt_file, lot)
+            if lookback_days:
+                import time
+                from core.gather_index import recent_file
+                if not recent_file(txt_file.stat(), time.time()-lookback_days*86400):
+                    continue
+            parsed = parse_gather_file(txt_file, lot, stats)
         except Exception:
             continue
         if parsed:

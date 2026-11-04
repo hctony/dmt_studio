@@ -48,6 +48,7 @@ class GatheringWorker(QThread):
         excluded_strip_ids: set[str],
         skipdata_path: str = "",
         ski_path: str = "",
+        lookback_days: int = 0,
     ):
         super().__init__()
         self.mode = mode
@@ -63,6 +64,7 @@ class GatheringWorker(QThread):
         self.excluded_strip_ids = excluded_strip_ids
         self.skipdata_path = skipdata_path
         self.ski_path = ski_path
+        self.lookback_days = max(0, int(lookback_days))
         self._stop = False
         import threading
         self.rework_event = threading.Event()
@@ -81,6 +83,9 @@ class GatheringWorker(QThread):
             merged: dict[str, GatherStrip] = {}
             paths = self.build_paths()
             self.progress.emit(f"{self.mode} 검색 시작: {len(paths)}개 PC 경로")
+            self.progress.emit(f"[SEARCH] " + (f"최근 {self.lookback_days}일" if self.lookback_days else "전체 기간") + " / 생성·수정 시각 기준 / LOT 공통 디스크 캐시 사용")
+            search_stats = {}
+            txt_counts = {}
             status: list[dict] = []
             parent_warnings: list[dict] = []
             duplicate_conflicts: list[dict] = []
@@ -101,15 +106,16 @@ class GatheringWorker(QThread):
                     status.append({"path": str(path), "status": _("경로 없음"), "txt_files": 0, "matched_strips": 0})
                     continue
                 self.progress.emit(f"[{index}/{len(paths)}] {path} TXT 검색")
-                txt_files = cached_txt_files(path)
-                direct_parent_hits = find_parent_gather_hits(path, self.lot, direct_only=True)
+                txt_files = cached_txt_files(path, self.lookback_days, search_stats)
+                txt_counts[path] = len(txt_files)
+                direct_parent_hits = find_parent_gather_hits(path, self.lot, direct_only=True, lookback_days=self.lookback_days, stats=search_stats)
                 if direct_parent_hits:
                     parent_warnings.append({"path": str(path), "parent_hits": direct_parent_hits, "scope": _("1단계 상위 폴더")})
                     self.progress.emit(f"[게더링 누락 점검] 1단계 상위 폴더 TXT에서 LOT 데이터 발견: {path.parent}")
                     for hit in direct_parent_hits[:5]:
                         self.progress.emit(f"  - {hit}")
                 if not txt_files:
-                    hits = direct_parent_hits or find_parent_gather_hits(path, self.lot)
+                    hits = direct_parent_hits or find_parent_gather_hits(path, self.lot, lookback_days=self.lookback_days, stats=search_stats)
                     if hits:
                         if not direct_parent_hits:
                             parent_warnings.append({"path": str(path), "parent_hits": hits, "scope": _("상위 경로")})
@@ -126,13 +132,14 @@ class GatheringWorker(QThread):
                     if self._stop:
                         break
                     try:
-                        parsed = parse_gather_file(txt_file, self.lot)
+                        parsed = parse_gather_file(txt_file, self.lot, search_stats)
                     except Exception as exc:
                         self.progress.emit(f"파싱 실패: {txt_file} ({exc})")
                         continue
                     for strip_id, item in parsed.items():
                         parsed_for_path.append((txt_file, clone_gather_strip(item)))
                 parsed_by_path[path] = parsed_for_path
+                self.progress.emit(f"[CACHE] 메모리 재사용 {search_stats.get('memory_hits',0)} / 디스크 재사용 {search_stats.get('disk_hits',0)} / 새로 읽음 {search_stats.get('remote_reads',0)} / 기간 제외 {search_stats.get('old_skipped',0)}")
 
             # 날짜 비교를 위한 파싱된 모든 아이템 수집
             all_items = [item for items in parsed_by_path.values() for _, item in items]
@@ -154,7 +161,7 @@ class GatheringWorker(QThread):
                 if path not in parsed_by_path:
                     continue
                 
-                txt_files_count = len(cached_txt_files(path)) if path.exists() else 0
+                txt_files_count = txt_counts.get(path, 0)
                 matched_before = len(merged)
                 replaced_before = replaced_strip_count
                 
@@ -221,6 +228,7 @@ class GatheringWorker(QThread):
                 "parent_warnings": parent_warnings,
                 "duplicate_conflicts": duplicate_conflicts,
                 "cache": {
+                    **search_stats,
                     "file_entries": len(GATHER_FILE_CACHE),
                     "txt_list_entries": len(GATHER_TXT_LIST_CACHE),
                 },

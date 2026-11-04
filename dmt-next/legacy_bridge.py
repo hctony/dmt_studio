@@ -74,6 +74,8 @@ def dispatch(method, args):
     if method == 'cache.status': return {k: len(v) for k, v in CACHES.items()}
     if method == 'cache.clear':
         for cache in CACHES.values(): cache.clear()
+        from core.gather_index import clear_index
+        clear_index()
         return dispatch('cache.status', {})
     if method == 'settings.read':
         # Only known UI namespaces; do not export unrelated registry entries.

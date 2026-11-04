@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import DEFAULT_MODEL
+from config import DEFAULT_MODEL, APP_SETTINGS
 from core.gather import build_gather_output, clone_gather_strip, gather_strip_from_payload, make_full_t_lines, merge_gather_strips
 from core.models import GatherStrip
 from core.utils import infer_lot_id_from_values, parse_excluded_strip_ids
@@ -581,6 +581,13 @@ class GatheringTab(QWidget):
         restore_line_edit(self.exclude_json_in, "gathering/exclude_json")
         restore_line_edit(self.skipdata_in, "gathering/skipdata")
         restore_line_edit(self.ski_in, "gathering/ski")
+        self.search_period = QComboBox()
+        self.search_period.addItem(_("최근 31일"), 31)
+        self.search_period.addItem(_("최근 7일"), 7)
+        self.search_period.addItem(_("전체 기간"), 0)
+        index = self.search_period.findData(int(APP_SETTINGS.value('gathering/lookback_days',31)))
+        self.search_period.setCurrentIndex(max(0,index))
+        self.search_period.currentIndexChanged.connect(lambda: APP_SETTINGS.setValue('gathering/lookback_days',self.search_period.currentData()))
         browse_json = QPushButton(_("JSON 선택"))
         browse_json.clicked.connect(self.choose_exclude_json)
         json_row = QHBoxLayout()
@@ -607,6 +614,7 @@ class GatheringTab(QWidget):
         self.lot_in.editingFinished.connect(self.on_lot_changed_smart)
         form.addRow(_("모델명"), self.model_in)
         form.addRow("LOT", lot_row)
+        form.addRow(_("검색 기간"), self.search_period)
         form.addRow(_("X 좌표 수"), self.x_count_in)
         form.addRow(_("Y 좌표 수"), self.y_count_in)
         form.addRow(_("허용수"), self.allowance_in)
@@ -836,6 +844,7 @@ class GatheringTab(QWidget):
         save_line_edit(self.skipdata_in, "gathering/skipdata")
         save_line_edit(self.ski_in, "gathering/ski")
         return {
+            "lookback_days": int(self.search_period.currentData()),
             "model": self.model_in.text().strip(),
             "lot": lot,
             "x_count": x_count,

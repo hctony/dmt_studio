@@ -13,3 +13,4 @@ yield_model_settings.json
 **/smoke-user-data/
 **/*-smoke.png
 **/node-compile-cache/
+**/gather-index.sqlite*
