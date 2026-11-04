@@ -1,10 +1,11 @@
 const {app,BrowserWindow,ipcMain,dialog,shell} = require('electron');
 const fs=require('node:fs/promises');const path=require('node:path');
 const {GuiClient}=require('./gui-client');const {installUpdater}=require('./updater');
-let win,gui;
+const {installLifecycle}=require('./lifecycle');
+let win,gui,lifecycle;
 const primaryInstance=app.requestSingleInstanceLock();
 if(!primaryInstance)app.quit();
-app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
+app.on('second-instance',()=>lifecycle?.show());
 let language='ko';const translations=require('./ui/translations.json');
 let recentPaths={};
 function translate(s){if(language==='ko')return s;let value=translations[s]||s;for(const key of Object.keys(translations).filter(k=>k.length>3).sort((a,b)=>b.length-a.length)){value=value.split(key).join(translations[key]);}return value;}
@@ -40,7 +41,7 @@ app.whenReady().then(async()=>{
     await fs.writeFile(dest+'.tmp',other+'\n'+connectionKeys.map(key=>`${key}=${current[key]||''}`).join('\n'));await fs.rename(dest+'.tmp',dest);
     await gui.retry();return true;
   });
-  ipcMain.handle('ui:language',(_e,value)=>{language=value==='zh-TW'?'zh-TW':'ko';});
+  ipcMain.handle('ui:language',(_e,value)=>{language=value==='zh-TW'?'zh-TW':'ko';lifecycle?.setLanguage(language);});
   ipcMain.handle('gui:snapshot',()=>gui.call('gui.snapshot'));
   ipcMain.handle('backend:retry',()=>{if(gui.busy||gui.pending.size||gui.updating)throw new Error('BACKEND_BUSY');return gui.retry();});
   ipcMain.handle('backend:status',()=>({error:gui.failure?.message||null}));
@@ -78,9 +79,8 @@ app.whenReady().then(async()=>{
   });
   win=new BrowserWindow({width:1500,height:1000,minWidth:900,minHeight:650,backgroundColor:'#f3f6fb',title:'DMT Analysis Studio',webPreferences:{preload:path.join(__dirname,'desktop-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:!app.isPackaged&&process.env.DMT_HEADLESS==='1'}});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  win.on('close',event=>{if(gui.busy||gui.pending.size){event.preventDefault();dialog.showMessageBoxSync(win,{type:'info',message:'진행 중인 작업을 완료하거나 중지하세요. / 請先完成或停止工作。'});}});
+  lifecycle=installLifecycle({app,win,gui,iconPath:path.join(__dirname,'assets','tray.ico')});
   win.webContents.on('will-navigate',event=>event.preventDefault());
   await win.loadFile(path.join(__dirname,'ui','studio.html'));
-  app.on('before-quit',event=>{if(gui.busy||gui.pending.size){event.preventDefault();dialog.showMessageBoxSync(win,{type:'info',message:'진행 중인 작업을 완료하거나 중지하세요. / 請先完成或停止工作。'});return;}gui.close();});
 });
 app.on('window-all-closed',()=>app.quit());

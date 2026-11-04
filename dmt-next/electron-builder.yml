@@ -7,6 +7,8 @@ files:
   - desktop-preload.js
   - gui-client.js
   - updater.js
+  - lifecycle.js
+  - assets/tray.ico
   - ui/studio.html
   - ui/studio.js
   - ui/model-settings.js

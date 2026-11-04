@@ -33,6 +33,6 @@ function installUpdater(app, ipcMain, isBusy, options = {}) {
       autoUpdater.quitAndInstall(true, true);
     } catch (error) { failed(error); throw error; }
   });
-  if (app.isPackaged) { check(); const timer = setInterval(check, 6 * 60 * 60 * 1000); timer.unref(); app.on('before-quit', () => clearInterval(timer)); }
+  if (app.isPackaged) { check(); const timer = setInterval(check, 6 * 60 * 60 * 1000); timer.unref(); app.on('will-quit', () => clearInterval(timer)); }
 }
 module.exports = { installUpdater };
