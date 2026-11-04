@@ -16,14 +16,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-          cache: false
       - run: pip install -r requirements.txt
       - run: npm ci
         working-directory: dmt-next
-      - run: python -m unittest discover -s dmt-next -p test_legacy_bridge.py
+      - run: python -m unittest discover -s dmt-next -p 'test_*.py'
       - run: ./dmt-next/build.ps1
       - uses: actions/upload-artifact@v4
         with:

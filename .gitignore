@@ -10,3 +10,6 @@
 yield_model_settings.json
 *.xlsx
 *.spec
+**/smoke-user-data/
+**/*-smoke.png
+**/node-compile-cache/

@@ -91,6 +91,9 @@ def dispatch(method, args):
     raise ValueError('Unknown method: ' + method)
 
 def main():
+    if '--gui' in sys.argv:
+        from gui_bridge import run
+        return run()
     if '--legacy-ui' in sys.argv:
         from ui.main_window import MainWindow
         from PySide6.QtWidgets import QApplication

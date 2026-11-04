@@ -74,6 +74,7 @@ class GatheringWorker(QThread):
 
     def stop(self) -> None:
         self._stop = True
+        self.rework_event.set()
 
     def run(self) -> None:
         try:

@@ -277,6 +277,7 @@ class GatheringModePage(QWidget):
             self.worker.stop()
 
     def on_finished(self, strips: list[GatherStrip], output: str, summary: dict) -> None:
+        strips, output, summary = self.apply_duplicate_choices(strips, output, summary)
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_export.setEnabled(True)
@@ -613,6 +614,10 @@ class GatheringTab(QWidget):
 
     def _on_batch_finished(self, strips: list, output: str, summary: dict) -> None:
         mode = self.batch_modes[self.batch_current_idx]
+        for page in self.findChildren(GatheringModePage):
+            if page.mode == mode:
+                strips, output, summary = page.apply_duplicate_choices(strips, output, summary)
+                break
         lot = self.lot_in.text().strip()
         out_file = self.batch_out_dir / f"Gather_{mode}_{lot}.txt"
         out_file.write_text(output, encoding="utf-8")

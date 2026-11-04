@@ -3,17 +3,19 @@ productName: DMT Analysis Studio
 directories:
   output: release
 files:
-  - main.js
-  - preload.js
-  - legacy-client.js
+  - desktop.js
+  - desktop-preload.js
+  - gui-client.js
   - updater.js
-  - ui/**
+  - ui/studio.html
+  - ui/studio.js
+  - ui/studio.css
+  - ui/translations.js
+  - ui/translations.json
   - package.json
 extraResources:
   - from: backend-dist/dmt-service
     to: backend
-  - from: backend/dmt-backend.exe
-    to: dmt-backend.exe
 win:
   target:
     - target: nsis
