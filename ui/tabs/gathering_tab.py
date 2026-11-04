@@ -520,6 +520,7 @@ class GatheringTab(QWidget):
         if lot_id:
             self.lot_in.setText(lot_id)
             save_line_edit(self.lot_in, "gathering/lot")
+            self.on_lot_changed_smart()
         else:
             self.load_lots()
 

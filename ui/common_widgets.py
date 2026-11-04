@@ -57,6 +57,7 @@ def finish_line_edit_lot_lookup(
     if ok and selected:
         lot_in.setText(selected)
         save_line_edit(lot_in, setting_key)
+        lot_in.editingFinished.emit()
         if logger:
             logger(f"LOT 선택: {selected}")
 

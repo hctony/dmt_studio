@@ -103,6 +103,20 @@ class GuiTests(unittest.TestCase):
         from ui.tabs.test_tab import TESTS,_FUNC_MAP
         for _,label,name in TESTS:
             with self.subTest(label=label):_FUNC_MAP[name]()
+    def test_gathering_lot_input_auto_and_lookup_all_resolve_legacy_paths(self):
+        from ui.common_widgets import finish_line_edit_lot_lookup
+        tab=self.tab(3)
+        with patch('core.utils.auto_find_bbt_skipdata_path',return_value='D:/test/BBT') as bbt, patch('core.utils.auto_find_ski_file_path',return_value='D:/test/final.ski') as ski:
+            self.action(tab.lot_in,'input','LOT-MANUAL')
+            bbt.assert_called_with('LOT-MANUAL');ski.assert_called_with('LOT-MANUAL')
+            with patch('ui.tabs.gathering_tab.infer_lot_id_from_values',return_value='LOT-AUTO'):
+                tab.auto_lot()
+            bbt.assert_called_with('LOT-AUTO');ski.assert_called_with('LOT-AUTO')
+            with patch('ui.common_widgets.QInputDialog.getItem',return_value=('LOT-SEARCH',True)):
+                finish_line_edit_lot_lookup(tab,'MODEL',tab.lot_in,'gathering/lot',[],None,['LOT-SEARCH'])
+            bbt.assert_called_with('LOT-SEARCH');ski.assert_called_with('LOT-SEARCH')
+            self.assertEqual(tab.skipdata_in.text(),'D:/test/BBT')
+            self.assertEqual(tab.ski_in.text(),'D:/test/final.ski')
     def test_defect_summary_opens_full_resolution_image_and_clears_old_images(self):
         from core.models import DefectRecord
         from PySide6.QtGui import QPixmap, QImage
