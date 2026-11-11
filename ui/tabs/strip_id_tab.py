@@ -1,5 +1,6 @@
 """StripID extraction tab."""
 from __future__ import annotations
+from ui.worker_lifetime import start_worker
 from core.i18n import _
 
 import json
@@ -100,7 +101,7 @@ class StripIdTab(QWidget):
         self.thread.progress.connect(self.result.append)
         self.thread.finished.connect(self.on_finished)
         self.thread.failed.connect(self.on_failed)
-        self.thread.start()
+        start_worker(self, self.thread)
 
     def auto_lot(self) -> None:
         lot_id = infer_lot_id_from_values(self.trial_path_in.text(), self.lot_in.text())
@@ -134,7 +135,7 @@ class StripIdTab(QWidget):
         self.trial_list_thread = TrialListThread(model, lot)
         self.trial_list_thread.finished.connect(self.on_trials_loaded)
         self.trial_list_thread.failed.connect(self.on_trials_failed)
-        self.trial_list_thread.start()
+        start_worker(self, self.trial_list_thread)
 
     def on_trials_loaded(self, paths: list[str]) -> None:
         self.btn_load_trials.setEnabled(True)

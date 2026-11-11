@@ -1,5 +1,6 @@
 """Yield calculation: gathering TXT parsing and summary building."""
 from __future__ import annotations
+from core.yield_rates import production_units, verified_population_ids
 from core.i18n import _
 
 import json
@@ -544,10 +545,12 @@ def calculate_yield_summary_many(
         set(blocks),
     )
     ivs_dummy_scrap_strips = set(dummy_9999_validation["applied_strips"])
-    expected_strip_ids = set(blocks) | ivs_dummy_scrap_strips
+    observed_strip_ids = set(blocks) | ivs_dummy_scrap_strips
+    population_ids = verified_population_ids(strip_json_path, units_per_strip)
+    expected_strip_ids = observed_strip_ids | population_ids
     lot_id = lot_id_from_blocks(blocks.values(), json_lot_id)
     total_strips = len(expected_strip_ids)
-    total_units = total_strips * units_per_strip
+    total_units = production_units(total_strips, units_per_strip)
 
     mixed_strips = [
         strip_id for strip_id in blocks
@@ -557,7 +560,7 @@ def calculate_yield_summary_many(
         strip_id for strip_id, block in blocks.items()
         if block.duplicate_in_source_count > 0
     ]
-    validation = build_strip_json_validation(strip_json_ids, expected_strip_ids, lot_id)
+    validation = build_strip_json_validation(strip_json_ids, observed_strip_ids, lot_id)
     txt_only_strips = validation["gather_only_strips"]
     missing_strips = validation["json_only_strips"]
     skipdata_only_strips = sorted(set(skipdata) - expected_strip_ids)
@@ -801,14 +804,16 @@ def calculate_yield_summary_by_process(
         gather_strip_ids,
     )
     ivs_dummy_scrap_strips = set(dummy_9999_validation["applied_strips"])
-    expected_strip_ids = gather_strip_ids | ivs_dummy_scrap_strips
+    observed_strip_ids = gather_strip_ids | ivs_dummy_scrap_strips
+    population_ids = verified_population_ids(strip_json_path, units_per_strip)
+    expected_strip_ids = observed_strip_ids | population_ids
     lot_id = lot_id_from_blocks(
         [block for blocks in process_blocks.values() for block in blocks.values()],
         json_lot_id,
     )
-    validation = build_strip_json_validation(strip_json_ids, expected_strip_ids, lot_id)
+    validation = build_strip_json_validation(strip_json_ids, observed_strip_ids, lot_id)
 
-    total_units = len(expected_strip_ids) * units_per_strip
+    total_units = production_units(len(expected_strip_ids), units_per_strip)
     defective_units = 0
     bbt_units = 0
     bbt_strip_count = 0

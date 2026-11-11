@@ -12,6 +12,7 @@ import paramiko
 
 from config import NAS_HOST, NAS_PORT, NAS_USER, NAS_PASSWORD, NAS_ROOT, MACHINES, IMAGE_EXTENSIONS
 from core.models import BundleInfo, TrialContext
+from core.cancellation import check_cancelled
 
 
 # ---------------------------------------------------------------------------
@@ -21,8 +22,16 @@ from core.models import BundleInfo, TrialContext
 def connect() -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(NAS_HOST, port=NAS_PORT, username=NAS_USER, password=NAS_PASSWORD, timeout=10)
-    return ssh, ssh.open_sftp()
+    try:
+        ssh.connect(NAS_HOST, port=NAS_PORT, username=NAS_USER, password=NAS_PASSWORD,
+                    timeout=10, banner_timeout=10, auth_timeout=10, channel_timeout=15)
+        ssh.get_transport().set_keepalive(15)
+        sftp = ssh.open_sftp()
+        sftp.get_channel().settimeout(30)
+        return ssh, sftp
+    except Exception:
+        ssh.close()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -128,11 +137,12 @@ def image_candidates(base_without_ext: str) -> list[str]:
     return paths
 
 
-def resolve_three_images(sftp: paramiko.SFTPClient, base_without_ext: str) -> list[str]:
+def resolve_three_images(sftp: paramiko.SFTPClient, base_without_ext: str, should_stop=None) -> list[str]:
     resolved: list[str] = []
     for suffix in ("_Sub2", "", "_Sub1"):
         found = ""
         for ext in IMAGE_EXTENSIONS:
+            check_cancelled(should_stop)
             candidate = f"{base_without_ext}{suffix}{ext}"
             if path_exists(sftp, candidate):
                 found = candidate
@@ -279,9 +289,10 @@ def parse_trial_context(trial_path: str) -> TrialContext:
     return TrialContext(machine=machine, model=model, lot=lot, trial=trial, path=normalized)
 
 
-def list_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient) -> list[TrialContext]:
+def list_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient, should_stop=None) -> list[TrialContext]:
     trials: list[TrialContext] = []
     for machine in MACHINES:
+        check_cancelled(should_stop)
         machine_path = f"{NAS_ROOT}/{machine}"
         if not path_exists(sftp, machine_path):
             alt = f"{NAS_ROOT}/{machine.lower()}"
@@ -293,6 +304,7 @@ def list_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient) -> list[Tri
         if not path_exists(sftp, lot_path):
             continue
         for trial in iter_dirs(sftp, lot_path):
+            check_cancelled(should_stop)
             trials.append(
                 TrialContext(machine=machine, model=model, lot=lot, trial=trial, path=f"{lot_path}/{trial}")
             )

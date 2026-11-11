@@ -56,6 +56,16 @@ def remember(model: str, lot: str, *, payload=None, kind='', output=None, config
             target = _root() / key / (kind + '-' + uuid4().hex + '.json')
             _write(target, json.dumps(payload, ensure_ascii=False, indent=2))
             updates[kind + '_in'] = str(target.resolve())
+            population = payload.get('population', {}) if kind == 'ivs_json' else {}
+            if population.get('complete') and population.get('scope') == 'lot':
+                ids = population.get('strip_ids', [])
+                strip_target = _root() / key / ('strip_json-' + uuid4().hex + '.json')
+                _write(strip_target, json.dumps({'schema':'dmt-studio-strip-population-v1','complete':True,'scope':'lot',
+                    'model':model, 'lot_id':lot, 'strip_ids':ids, 'strip_count':len(ids),
+                    'units_per_strip':population.get('units_per_strip',0)}, ensure_ascii=False))
+                updates['strip_json_in'] = str(strip_target.resolve())
+                if population.get('total_units'):
+                    updates['units_per_strip_in'] = str(population['units_per_strip'])
         if kind in ('VRS', 'FVI', 'IVS') and output is not None:
             # New file per completion: a manually edited input must not silently
             # change underneath Yield when the same stage is rerun.
@@ -86,5 +96,7 @@ def latest():
 
 
 def remember_payload(payload, kind):
+    if kind == 'ivs_json' and 'population' in payload and not payload['population'].get('complete'):
+        return False
     return remember(str(payload.get('model', '')), str(payload.get('lot_id', '')),
                     payload=payload, kind=kind)

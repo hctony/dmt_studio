@@ -1,5 +1,6 @@
 """Gathering strip search tab."""
 from __future__ import annotations
+from ui.worker_lifetime import start_worker
 from core.i18n import _
 
 from typing import Optional
@@ -62,7 +63,7 @@ class GatheringStripSearchTab(QWidget):
         self.search_thread.progress.connect(self.result.append)
         self.search_thread.finished.connect(self.on_finished)
         self.search_thread.failed.connect(self.on_failed)
-        self.search_thread.start()
+        start_worker(self, self.search_thread)
 
     def on_finished(self, rows: list[dict]) -> None:
         self.btn_search.setEnabled(True)

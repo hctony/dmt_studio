@@ -18,3 +18,4 @@ yield_model_settings.json
 **/remote-sessions/
 **/network-server.json
 **/measurements.jsonl*
+**/diagnostics/

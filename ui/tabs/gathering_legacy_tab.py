@@ -1,3 +1,4 @@
+from ui.worker_lifetime import start_worker
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QFormLayout, QLineEdit, QPushButton, QHBoxLayout, QSplitter, QTableWidget, QTextEdit, QMessageBox, QTabWidget, QFileDialog, QTableWidgetItem
 from core.i18n import _
 import re
@@ -180,7 +181,7 @@ class GatheringLegacyTab(QWidget):
         self.worker.progress.connect(self.log)
         self.worker.finished.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
-        self.worker.start()
+        start_worker(self, self.worker)
 
     def stop(self) -> None:
         if self.worker:
@@ -239,7 +240,7 @@ class GatheringLegacyTab(QWidget):
         self.search_thread.progress.connect(self.log)
         self.search_thread.finished.connect(self.on_ivs_image_search_finished)
         self.search_thread.failed.connect(self.on_ivs_image_search_failed)
-        self.search_thread.start()
+        start_worker(self, self.search_thread)
 
     def on_ivs_image_search_finished(self, payload: dict) -> None:
         self.btn_ivs_image_search.setEnabled(True)
@@ -301,7 +302,7 @@ class GatheringLegacyTab(QWidget):
         self.loader_thread = ImageLoaderThread(images)
         self.loader_thread.finished.connect(self.on_ivs_images_loaded)
         self.loader_thread.failed.connect(lambda msg: self.result.append(f"IVS 이미지 로드 실패: {msg}"))
-        self.loader_thread.start()
+        start_worker(self, self.loader_thread)
 
     def on_ivs_images_loaded(self, paths: list[str], images: list[bytes]) -> None:
         for label, path, data in zip(self.ivs_image_labels, paths, images):

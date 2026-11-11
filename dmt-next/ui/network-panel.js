@@ -1,5 +1,6 @@
 (()=>{
  if(!window.studio.networkStatus)return;
+ const diagnostic=el('button');diagnostic.id='export-diagnostics';const diagnosticLabel=()=>diagnostic.textContent=tr('진단 로그 내보내기','匯出診斷紀錄');diagnosticLabel();$('language').addEventListener('change',diagnosticLabel);diagnostic.onclick=()=>window.studio.exportDiagnostics().catch(error);document.querySelector('footer').append(diagnostic);
  const button=el('button');button.id='network-mode';document.querySelector('footer').prepend(button);
  const label=()=>button.textContent=tr('서버·클라이언트 / 성능 측정','伺服器・用戶端 / 效能測量');label();$('language').addEventListener('change',label);
  button.onclick=async()=>{try{

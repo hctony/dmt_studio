@@ -1,5 +1,6 @@
 """Strip diagnosis and coordinate validation tab."""
 from __future__ import annotations
+from ui.worker_lifetime import start_worker
 from core.i18n import _
 
 import json
@@ -252,7 +253,7 @@ class StripDiagnosisTab(QWidget):
         self.model_lot_thread = ModelLotListThread("models")
         self.model_lot_thread.finished.connect(self.on_model_lot_loaded)
         self.model_lot_thread.failed.connect(self.on_model_lot_failed)
-        self.model_lot_thread.start()
+        start_worker(self, self.model_lot_thread)
 
     def load_lots(self) -> None:
         model = self.model_combo.currentText().strip()
@@ -264,7 +265,7 @@ class StripDiagnosisTab(QWidget):
         self.model_lot_thread = ModelLotListThread("lots", model)
         self.model_lot_thread.finished.connect(self.on_model_lot_loaded)
         self.model_lot_thread.failed.connect(self.on_model_lot_failed)
-        self.model_lot_thread.start()
+        start_worker(self, self.model_lot_thread)
 
     def on_model_lot_loaded(self, mode: str, values: list[str]) -> None:
         self.btn_search.setEnabled(True)
@@ -504,7 +505,7 @@ class StripDiagnosisTab(QWidget):
         self.search_thread.progress.connect(self.result.append)
         self.search_thread.finished.connect(self.on_strip_search_finished)
         self.search_thread.failed.connect(self.on_strip_search_failed)
-        self.search_thread.start()
+        start_worker(self, self.search_thread)
 
     def build_local_strip_report(self, strip_id: str) -> str:
         txt_paths = self.current_txt_paths()

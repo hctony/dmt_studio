@@ -1,10 +1,19 @@
-const {app,BrowserWindow,ipcMain,dialog,shell,Menu,clipboard} = require('electron');
+const {app,BrowserWindow,ipcMain,dialog,shell,Menu,clipboard,crashReporter} = require('electron');
 const fs=require('node:fs/promises');const path=require('node:path');
 const {GuiClient}=require('./gui-client');const {installUpdater}=require('./updater');
 const {installLifecycle}=require('./lifecycle');
 const {NetworkServer}=require('./network-server');
 const {Measurement}=require('./measurement');
+const {Diagnostics,watchWindow}=require('./diagnostics');
 let win,gui,lifecycle,network,measurement,clientWindow;
+const privateValues=[];
+const diagnostics=new Diagnostics(app.getPath('userData'),()=>[...privateValues,process.env.DMT_NAS_PASSWORD,...(network?.config.clients||[]).map(c=>c.token)].filter(Boolean));
+try{crashReporter.start({uploadToServer:false});}catch(error){diagnostics.write('crash-reporter-unavailable',{error:error.message});}
+diagnostics.write('app-start',{version:app.getVersion(),versions:process.versions,pid:process.pid});
+process.on('uncaughtExceptionMonitor',error=>diagnostics.write('main-uncaught',{error:error.stack||error.message}));
+app.on('child-process-gone',(_event,details)=>diagnostics.write('electron-child-gone',details));
+app.on('before-quit',()=>diagnostics.write('app-before-quit',{localBusy:gui?.busy,serverBusy:network?.busy}));
+app.on('will-quit',()=>diagnostics.write('app-will-quit'));
 const primaryInstance=app.requestSingleInstanceLock();
 if(!primaryInstance)app.quit();
 app.on('second-instance',()=>lifecycle?.show());
@@ -31,9 +40,10 @@ app.whenReady().then(async()=>{
   if(!primaryInstance)return;
   await fs.mkdir(app.getPath('userData'),{recursive:true});
   try{recentPaths=JSON.parse(await fs.readFile(path.join(app.getPath('userData'),'dialog-paths.json'),'utf8'));}catch{}
-  gui=new GuiClient(onEvent);
+  try{for(const line of (await fs.readFile(path.join(app.getPath('userData'),'.env'),'utf8')).split(/\r?\n/))if(line.startsWith('DMT_NAS_PASSWORD='))privateValues.push(line.slice(line.indexOf('=')+1).trim().replace(/^['"]|['"]$/g,''));}catch{}
+  gui=new GuiClient(onEvent,{diagnostics,label:'A'});
   measurement=new Measurement(app.getPath('userData'));
-  network=new NetworkServer({root:app.getPath('userData'),uiDir:path.join(__dirname,'ui'),createClient:(event,options)=>new GuiClient(event,options),seed:()=>gui.call('gui.export-settings'),local:gui,measurement,version:app.getVersion()});
+  network=new NetworkServer({root:app.getPath('userData'),uiDir:path.join(__dirname,'ui'),createClient:(event,options)=>new GuiClient(event,{...options,diagnostics,label:path.basename(options.dataDir)}),seed:()=>gui.call('gui.export-settings'),local:gui,measurement,diagnostics,version:app.getVersion()});
   await network.initialize();
   const allBusy=()=>gui.busy||gui.pending.size>0||network.busy;
   ipcMain.handle('network:status',()=>network.status());
@@ -45,13 +55,16 @@ app.whenReady().then(async()=>{
   ipcMain.handle('network:cancel',(_e,name)=>network.cancelQueued(name));
   ipcMain.handle('measurement:enabled',(_e,value)=>{measurement.enabled=value===true;return measurement.report();});
   ipcMain.handle('measurement:export',async()=>{const r=await dialog.showSaveDialog(win,{title:'성능 측정 내보내기 / 匯出效能測量',defaultPath:'dmt-measurements.json',filters:[{name:'JSON',extensions:['json']}]});if(r.canceled)return null;await fs.writeFile(r.filePath,JSON.stringify(measurement.export(),null,2));return r.filePath;});
+  ipcMain.handle('diagnostics:export',async()=>{const r=await dialog.showSaveDialog(win,{title:'진단 로그 내보내기 / 匯出診斷紀錄',defaultPath:'dmt-diagnostics.json',filters:[{name:'JSON',extensions:['json']}]});if(r.canceled)return null;const state=network.status();await fs.writeFile(r.filePath,JSON.stringify(diagnostics.export({version:app.getVersion(),measurement:measurement.report(),server:{running:state.running,active:state.active,queued:state.queued,concurrency:state.config.concurrency,sessions:state.sessions},localCrashDirectory:app.getPath('crashDumps')}),null,2));return r.filePath;});
   ipcMain.handle('network:client',async(_e,value)=>{
     if(allBusy()||network.server)throw new Error('작업과 서버 모드를 종료한 뒤 연결하세요. / 請先完成工作並關閉伺服器模式。');
     const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new Error('A PC 주소만 입력하세요. 예: http://192.168.0.10:8765 / 請僅輸入 A 電腦位址。');
     if(clientWindow&&!clientWindow.isDestroyed())clientWindow.close();
     clientWindow=new BrowserWindow({width:1500,height:1000,title:'DMT Analysis Studio — Client',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
+    const openedClient=clientWindow;
+    watchWindow(openedClient,'client',diagnostics,async(details,id)=>{if(openedClient.isDestroyed()||win.isDestroyed())return;lifecycle?.show();const result=await dialog.showMessageBox(win,{type:'error',title:'DMT Analysis Studio',message:translate('클라이언트 화면이 중단되었습니다. A PC의 수집은 계속될 수 있습니다. 진단 로그를 내보내 주세요.'),detail:`${details.reason} · ${id}`,buttons:[translate('다시 연결'),translate('닫기')],defaultId:0,cancelId:1});if(result.response===0&&!openedClient.isDestroyed()){openedClient.webContents.reload();openedClient.show();}});
     clientWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));clientWindow.webContents.on('will-navigate',(event,target)=>{if(new URL(target).origin!==url.origin)event.preventDefault();});
-    clientWindow.on('closed',()=>{clientWindow=null;lifecycle?.show();});await clientWindow.loadURL(url.href);win.hide();return true;
+    clientWindow.on('closed',()=>{if(clientWindow===openedClient)clientWindow=null;lifecycle?.show();});await clientWindow.loadURL(url.href);win.hide();return true;
   });
   const connectionKeys=['DMT_NAS_HOST','DMT_NAS_PORT','DMT_NAS_USER','DMT_NAS_PASSWORD','DMT_NAS_ROOT'];
   async function readConnection(){const result={};try{const content=await fs.readFile(path.join(app.getPath('userData'),'.env'),'utf8');for(const line of content.split(/\r?\n/)){const i=line.indexOf('=');if(i>0&&connectionKeys.includes(line.slice(0,i).trim()))result[line.slice(0,i).trim()]=line.slice(i+1).trim();}}catch(e){if(e.code!=='ENOENT')throw e;}return result;}
@@ -103,6 +116,7 @@ app.whenReady().then(async()=>{
     onInstallError:()=>{gui.updating=false;if(network.config.enabled&&!network.server)network.start().catch(e=>network.startupError=e.message);}
   });
   win=new BrowserWindow({width:1500,height:1000,minWidth:900,minHeight:650,backgroundColor:'#f3f6fb',title:'DMT Analysis Studio',webPreferences:{preload:path.join(__dirname,'desktop-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:!app.isPackaged&&process.env.DMT_HEADLESS==='1'}});
+  watchWindow(win,'local',diagnostics);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   const lifecycleGui={get busy(){return gui.busy||network.busy;},get pending(){return gui.pending;},close(){network.close();measurement.close();gui.close();}};
   lifecycle=installLifecycle({app,win,gui:lifecycleGui,iconPath:path.join(__dirname,'assets','tray.ico')});

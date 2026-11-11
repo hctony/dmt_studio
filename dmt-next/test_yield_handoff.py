@@ -97,6 +97,19 @@ class YieldHandoffTests(unittest.TestCase):
         self.assertFalse(handoff.remember_payload({'lot_id': 'OTHER-'}, 'ivs_json'))
         self.assertEqual(handoff.latest()['lot'], 'LOT-')
 
+    def test_verified_ivs_population_supplies_all_strip_ids_and_yield_units(self):
+        from core.ivs_population import population_payload
+        payload={'model':'MODEL','lot_id':'LOT-','records':[],'population':population_payload(['LOT-01','LOT-02','LOT-03'],64)}
+        handoff.remember_payload(payload,'ivs_json');self.tab.apply_workflow_inputs()
+        self.assertEqual(json.loads(Path(self.tab.strip_json_in.text()).read_text())['strip_ids'],['LOT-01','LOT-02','LOT-03'])
+        self.assertEqual(self.tab.units_per_strip_in.text(),'64')
+
+    def test_incomplete_ivs_population_does_not_replace_last_completed_input(self):
+        self.gather();previous=handoff.latest()
+        self.assertFalse(handoff.remember_payload({'model':'MODEL','lot_id':'OTHER-','records':[],
+            'population':{'complete':False,'parse_errors':1}},'ivs_json'))
+        self.assertEqual(handoff.latest(),previous)
+
     def test_completed_ivs_and_strip_tab_callbacks_register_original_payloads(self):
         from ui.tabs.ivs_tab import IvsStudioTab
         from ui.tabs.strip_id_tab import StripIdTab

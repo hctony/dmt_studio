@@ -1,5 +1,6 @@
 """Test tab: verifies core logic functions after modularization."""
 from __future__ import annotations
+from ui.worker_lifetime import start_worker
 from core.i18n import _
 
 import io
@@ -422,7 +423,7 @@ class TestTab(QWidget):
         self._runner = _TestRunner(indices)
         self._runner.result_ready.connect(self._on_result)
         self._runner.all_done.connect(self._on_all_done)
-        self._runner.start()
+        start_worker(self, self._runner)
 
     def _run_all(self) -> None:
         self._run_indices(list(range(len(TESTS))))

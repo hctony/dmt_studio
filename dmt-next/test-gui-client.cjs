@@ -23,3 +23,9 @@ test('update shutdown blocks calls and waits for backend exit',async()=>{
  await assert.rejects(s.client.call('gui.snapshot'),/UPDATE_INSTALLING/);assert.equal(stopped,false);
  s.children[0].emit('exit',0);await done;assert.equal(stopped,true);assert.equal(s.events.length,0);
 });
+
+test('backend exit records native code, last context, resource sample and stderr',async()=>{
+ const s=setup(),written=[],stderr=[];s.client.options.diagnostics={write:(kind,data)=>{written.push({kind,data});return 'diagnostic-id';},stderr:(label,value)=>stderr.push(value)};
+ const request=s.client.call('gui.snapshot');s.children[0].stdout.write(JSON.stringify({event:'snapshot',snapshot:{busy:true,context:{lot_in:'RX-'},tasks:[{detail:'last.xml'}]}})+'\n');s.children[0].stdout.write(JSON.stringify({event:'resources',resources:{rssBytes:123456}})+'\n');s.children[0].stderr.write('QThread: Destroyed while thread is still running');s.children[0].emit('exit',3221226505,null);await assert.rejects(request,/QThread/);
+ const failure=written.find(e=>e.kind==='backend-failure').data;assert.equal(failure.exitHex,'0xc0000409');assert.equal(failure.context.lot_in,'RX-');assert.equal(failure.resources.rssBytes,123456);assert(stderr.join('').includes('QThread'));assert.equal(s.events.at(-1).diagnosticId,'diagnostic-id');
+});

@@ -1,5 +1,6 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('studio',{
+  exportDiagnostics:()=>ipcRenderer.invoke('diagnostics:export'),
   networkStatus:()=>ipcRenderer.invoke('network:status'),
   configureNetwork:args=>ipcRenderer.invoke('network:configure',args),
   startServer:()=>ipcRenderer.invoke('network:start'),

@@ -10,6 +10,7 @@ files:
   - lifecycle.js
   - network-server.js
   - measurement.js
+  - diagnostics.js
   - assets/tray.ico
   - ui/studio.html
   - ui/studio.js

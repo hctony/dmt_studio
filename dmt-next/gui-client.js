@@ -16,20 +16,21 @@ class GuiClient {
     }
     const args=app.isPackaged?['--gui']:['-u',path.join(__dirname,'legacy_bridge.py'),'--gui'];
     const dataDir=this.options.dataDir||app.getPath('userData');
-    const child=spawn(exe,args,{cwd:dataDir,env:{...process.env,DMT_DATA_DIR:dataDir,QT_QPA_PLATFORM:'offscreen',...this.options.env},windowsHide:true,stdio:['pipe','pipe','pipe']});
+    const child=spawn(exe,args,{cwd:dataDir,env:{...process.env,DMT_DATA_DIR:dataDir,QT_QPA_PLATFORM:'offscreen',PYTHONFAULTHANDLER:'1',...this.options.env},windowsHide:true,stdio:['pipe','pipe','pipe']});
     this.child=child;let stderr='';
-    child.stderr.on('data',data=>{stderr=(stderr+data.toString()).slice(-6000);});
+    this.options.diagnostics?.write('backend-start',{backend:this.options.label||'A',pid:child.pid});
+    child.stderr.on('data',data=>{const value=data.toString();stderr=(stderr+value).slice(-12000);this.options.diagnostics?.stderr(this.options.label||'A',value);});
     child.stdin.on('error',()=>{});
-    const fail=error=>{if(this.child!==child)return;this.child=null;this.busy=false;this.failure=error;for(const p of this.pending.values())p.reject(error);this.pending.clear();this.onEvent({event:'backend-error',error:error.message});};
-    child.on('error',fail);child.on('exit',code=>fail(new Error(stderr||`Backend exited (${code})`)));
+    const fail=(error,details={})=>{if(this.child!==child)return;const diagnosticId=this.options.diagnostics?.write('backend-failure',{backend:this.options.label||'A',pid:child.pid,error:error.message,context:this.snapshot?.context,tasks:this.snapshot?.tasks,resources:this.lastResources,lastMethod:this.lastMethod,...details});this.child=null;this.busy=false;this.failure=error;for(const p of this.pending.values())p.reject(error);this.pending.clear();this.onEvent({event:'backend-error',error:error.message,diagnosticId,...details});};
+    child.on('error',error=>fail(error));child.on('exit',(code,signal)=>fail(new Error(stderr||`Backend exited (${code}, ${signal||'no signal'})`),{exitCode:code,exitHex:Number.isInteger(code)?'0x'+(code>>>0).toString(16):null,signal}));
     createInterface({input:child.stdout}).on('line',line=>{
       if(this.child!==child)return;
       let m;try{m=JSON.parse(line);}catch{fail(new Error('Invalid backend response'));child.kill();return;}
-      if(m.event){if(m.event==='snapshot'){this.snapshot=m.snapshot;this.busy=m.snapshot.busy;}this.onEvent(m);return;}
+      if(m.event){if(m.event==='snapshot'){this.snapshot=m.snapshot;this.busy=m.snapshot.busy;}if(m.event==='resources')this.lastResources=m.resources;if(m.event==='error')this.options.diagnostics?.write('backend-reported-error',{backend:this.options.label||'A',error:m.error,context:this.snapshot?.context});this.onEvent(m);return;}
       const p=this.pending.get(m.id);if(!p)return;this.pending.delete(m.id);m.error?p.reject(new Error(m.error)):p.resolve(m.result);
     });
   }
-  call(method,args={}){if(this.updating)return Promise.reject(new Error('UPDATE_INSTALLING'));if(this.failure)return Promise.reject(this.failure);try{this.start();}catch(error){return Promise.reject(error);}const id=++this.sequence;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});this.child.stdin.write(JSON.stringify({id,method,args})+'\n');});}
+  call(method,args={}){if(this.updating)return Promise.reject(new Error('UPDATE_INSTALLING'));if(this.failure)return Promise.reject(this.failure);try{this.start();}catch(error){return Promise.reject(error);}if(!['gui.snapshot','gui.image-step'].includes(method))this.lastMethod=method;const id=++this.sequence;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});this.child.stdin.write(JSON.stringify({id,method,args})+'\n');});}
   async retry(){this.close();this.failure=null;return this.call('gui.snapshot');}
   async stopForUpdate(){
     this.updating=true;

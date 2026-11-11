@@ -1,5 +1,6 @@
 """Gathering collection tabs and dialogs."""
 from __future__ import annotations
+from ui.worker_lifetime import start_worker
 from core.i18n import _
 
 import re
@@ -390,7 +391,7 @@ class GatheringModePage(QWidget):
         self.worker.finished.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
         self.worker.date_selection_required.connect(self.on_date_selection_required)
-        self.worker.start()
+        start_worker(self, self.worker)
 
     def on_date_selection_required(self, dates: list[str]) -> None:
         dialog = ReworkDateDialog(dates, self)
@@ -759,7 +760,7 @@ class GatheringTab(QWidget):
         self.batch_worker.finished.connect(self._on_batch_finished)
         self.batch_worker.failed.connect(self._on_batch_failed)
         self.batch_worker.date_selection_required.connect(self._on_batch_date_selection_required)
-        self.batch_worker.start()
+        start_worker(self, self.batch_worker)
         
     def _on_batch_date_selection_required(self, dates: list[str]) -> None:
         mode = self.batch_modes[self.batch_current_idx]

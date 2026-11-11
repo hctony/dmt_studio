@@ -119,7 +119,7 @@ class Controller(C.QObject):
     def task_progress(self):
         tasks=[];seen=set()
         for owner in [self.window, *self.window.findChildren(W.QWidget)]:
-            for worker in vars(owner).values():
+            for worker in [*vars(owner).values(), *getattr(owner, '_live_workers', ())]:
                 if not isinstance(worker,C.QThread) or not shiboken6.isValid(worker) or not worker.isRunning() or id(worker) in seen: continue
                 seen.add(id(worker))
                 if not hasattr(worker,'_dmt_started'):
@@ -133,7 +133,7 @@ class Controller(C.QObject):
         if self.open_dialogs():
             return True
         for owner in [self.window, *self.window.findChildren(W.QWidget)]:
-            for value in vars(owner).values():
+            for value in [*vars(owner).values(), *getattr(owner, '_live_workers', ())]:
                 if isinstance(value,C.QThread) and shiboken6.isValid(value) and value.isRunning(): return True
         return bool(self.waiters)
 
@@ -171,12 +171,19 @@ class Controller(C.QObject):
             if pix and not pix.isNull():
                 cached=self.pixmaps.get(key)
                 if not cached or cached[0]!=pix.cacheKey():
-                    data=C.QByteArray(); buffer=C.QBuffer(data); buffer.open(C.QIODevice.WriteOnly); pix.save(buffer,'PNG')
-                    cached=(pix.cacheKey(),'data:image/png;base64,'+base64.b64encode(bytes(data)).decode())
+                    # Keep the original pixmap for backend exports. Transfer a
+                    # bounded display preview so three large inspection images
+                    # cannot exhaust the remote renderer's memory.
+                    preview=pix.scaled(1600,1600,C.Qt.KeepAspectRatio,C.Qt.SmoothTransformation) if max(pix.width(),pix.height())>1600 else pix
+                    large=max(pix.width(),pix.height())>1600
+                    data=C.QByteArray(); buffer=C.QBuffer(data); buffer.open(C.QIODevice.WriteOnly); preview.save(buffer,'JPG' if large else 'PNG',85 if large else -1)
+                    cached=(pix.cacheKey(),('data:image/jpeg;base64,' if large else 'data:image/png;base64,')+base64.b64encode(bytes(data)).decode())
                     self.pixmaps[key]=cached
                 return dict(d,type='image',src=cached[1],imageSlot=w.property('dmt_image_slot'))
             return dict(d,type='label',text=w.text())
-        if isinstance(w,W.QTextEdit): return dict(d,type='text',text=w.toPlainText(),readonly=w.isReadOnly())
+        if isinstance(w,W.QTextEdit):
+            text=w.toPlainText()
+            return dict(d,type='text',text=text[-50000:] if w.isReadOnly() else text,readonly=w.isReadOnly(),truncated=w.isReadOnly() and len(text)>50000)
         if isinstance(w,W.QProgressBar): return dict(d,type='progress',value=w.value(),max=w.maximum())
         if isinstance(w,W.QTableWidget):
             start=self.pages.get(key,0); start=min(start,max(0,((w.rowCount()-1)//200)*200)); rows=[]
@@ -336,6 +343,8 @@ class Controller(C.QObject):
 
 
 def run():
+    import faulthandler
+    faulthandler.enable(file=sys.stderr, all_threads=True)
     sys.stdin.reconfigure(encoding='utf-8');sys.stdout.reconfigure(encoding='utf-8')
     output=sys.stdout;sys.stdout=sys.stderr
     lock=threading.Lock()

@@ -11,6 +11,8 @@ from typing import Callable, Optional
 import paramiko
 
 from core.models import DefectRecord, TrialContext
+from core.cancellation import check_cancelled
+from core.yield_rates import single_defect_rate
 from core.nas import decode_xml, face_from_def_side, resolve_three_images, normalize_remote_path
 
 
@@ -40,12 +42,16 @@ def parse_ivs_xml(
     ctx: TrialContext,
     strip_folder: str,
     progress: Optional[Callable[[str], None]] = None,
+    should_stop=None,
+    on_strip=None,
 ) -> list[DefectRecord]:
+    check_cancelled(should_stop)
     records: list[DefectRecord] = []
     try:
         with sftp.open(xml_path, "rb") as fh:
             root = decode_xml(fh.read())
     except Exception as exc:
+        check_cancelled(should_stop)
         if progress:
             progress(f"XML 파싱 실패: {xml_path} ({exc})")
         return records
@@ -57,7 +63,12 @@ def parse_ivs_xml(
             barcode = value.strip().upper()
             break
 
+    if on_strip is not None:
+        from core.ivs_population import xml_grid_units
+        on_strip(barcode, xml_grid_units(root))
+
     for parent in root.iter():
+        check_cancelled(should_stop)
         parent_tag = parent.tag.split("}")[-1]
         for p_elem in list(parent):
             tag = p_elem.tag.split("}")[-1].upper()
@@ -97,13 +108,13 @@ def parse_ivs_xml(
                     img_pt_x=parse_float(p_elem.attrib.get("img_pt_x")),
                     img_pt_y=parse_float(p_elem.attrib.get("img_pt_y")),
                     source_xml=xml_path,
-                    images=resolve_three_images(sftp, base_img_path),
+                    images=resolve_three_images(sftp, base_img_path, should_stop),
                 )
             )
     return records
 
 
-def build_summary(records: list[DefectRecord]) -> dict:
+def build_summary(records: list[DefectRecord], total_units=None) -> dict:
     normal_records = [r for r in records if r.is_rate_defect]
     rework_records = [r for r in records if r.is_rework]
     dummy_records = [r for r in records if r.is_dummy and not r.is_rework]
@@ -122,11 +133,14 @@ def build_summary(records: list[DefectRecord]) -> dict:
                 "ivs_1": code,
                 "defect_units": count,
                 "rate_percent": round((count / total_defect_units * 100), 4) if total_defect_units else 0.0,
+                "single_defect_rate_percent": single_defect_rate(count, total_units),
             }
         )
 
     return {
         "total_records": len(records),
+        "total_units": total_units,
+        "ivs_yield_percent": round(100-total_defect_units/total_units*100,6) if total_units and total_defect_units<=total_units else None,
         "total_defect_units_excluding_rework_dummy": total_defect_units,
         "rework_9998_count": len(rework_records),
         "rework_9998_units": len({r.unit_key() for r in rework_records}),
@@ -136,16 +150,18 @@ def build_summary(records: list[DefectRecord]) -> dict:
     }
 
 
-def records_to_json(model: str, lot: str, records: list[DefectRecord]) -> dict:
+def records_to_json(model: str, lot: str, records: list[DefectRecord], population=None) -> dict:
     payload = {
         "schema": "dmt-studio-ivs-v1",
         "lot_id": lot,
         "model": model,
         "total_strips": len({record.strip_id for record in records}),
-        "summary": build_summary(records),
+        "summary": build_summary(records, population.get('total_units') if population else None),
         "records": [asdict(record) for record in records],
         "strips": {},
     }
+    if population is not None:
+        payload['population']=population
     strip_map: dict[str, list[DefectRecord]] = defaultdict(list)
     for record in records:
         strip_map[record.strip_id].append(record)

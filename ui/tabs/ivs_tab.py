@@ -23,6 +23,7 @@ from core.ivs import build_summary, records_to_json, load_records_from_payload
 from core.utils import infer_lot_id_from_values
 from ui.settings_helper import restore_line_edit, save_line_edit
 from ui.common_widgets import start_line_edit_lot_lookup
+from ui.worker_lifetime import start_worker
 from workers.ivs_workers import (
     IvsScanThread, StripDefectSearchThread, ImageLoaderThread, DownloadThread,
 )
@@ -74,10 +75,19 @@ class IvsStudioTab(QWidget):
         form.addRow("LOT", lot_row)
         form.addRow(_("Trial 선택"), trial_select_row)
         form.addRow(_("특정 Trial 경로"), self.trial_path_in)
+        self.units_per_strip_in = QLineEdit()
+        self.units_per_strip_in.setPlaceholderText(_("모델 설정 또는 NAS 행·열에서 자동 확인"))
+        self.restore_ivs_units()
+        self.model_in.editingFinished.connect(self.restore_ivs_units)
+        self.units_per_strip_in.editingFinished.connect(self.update_ivs_rates)
+        form.addRow(_("스트립당 Unit 수"), self.units_per_strip_in)
         root.addWidget(config_box)
 
         buttons = QHBoxLayout()
         self.btn_scan = QPushButton(_("IVS 스캔"))
+        self.btn_stop = QPushButton(_("중지"))
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.clicked.connect(self.stop_scan)
         self.btn_load = QPushButton(_("JSON 열기"))
         self.btn_save = QPushButton(_("JSON 저장"))
         self.btn_save.setEnabled(False)
@@ -88,6 +98,7 @@ class IvsStudioTab(QWidget):
         self.btn_save.clicked.connect(self.save_json)
         self.btn_download.clicked.connect(self.download_filtered)
         buttons.addWidget(self.btn_scan)
+        buttons.addWidget(self.btn_stop)
         buttons.addWidget(self.btn_load)
         buttons.addWidget(self.btn_save)
         buttons.addWidget(self.btn_download)
@@ -116,8 +127,8 @@ class IvsStudioTab(QWidget):
         self.summary_label = QLabel(_("대기 중"))
         self.summary_label.setWordWrap(True)
         left_lay.addWidget(self.summary_label)
-        self.summary_table = QTableWidget(0, 3)
-        self.summary_table.setHorizontalHeaderLabels([_("불량"), _("Unit 수"), _("비율")])
+        self.summary_table = QTableWidget(0, 4)
+        self.summary_table.setHorizontalHeaderLabels([_("불량"), _("Unit 수"), _("불량 내 구성비"), _("단일 불량률 (전체 Unit 기준)")])
         self.summary_table.cellClicked.connect(self.open_defect_images)
         left_lay.addWidget(self.summary_table)
         left_lay.addWidget(QLabel(_("다운로드 불량 그룹 (불량율 높은 순)")))
@@ -165,6 +176,8 @@ class IvsStudioTab(QWidget):
         root.addWidget(splitter, stretch=1)
 
     def start_scan(self) -> None:
+        if self.scan_thread and self.scan_thread.isRunning():
+            return
         model = self.model_in.text().strip()
         lot = self.lot_in.text().strip()
         trial_path = self.trial_path_in.text().strip()
@@ -175,13 +188,51 @@ class IvsStudioTab(QWidget):
         save_line_edit(self.lot_in, "ivs/lot")
         save_line_edit(self.trial_path_in, "ivs/trial_path")
         self.btn_scan.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.btn_load.setEnabled(False)
+        self.btn_save.setEnabled(False)
+        self.btn_download.setEnabled(False)
+        self._scan_stop_requested = False
         self.info.clear()
         self.records = []
-        self.scan_thread = IvsScanThread(model, lot, trial_path)
+        self.current_payload = None
+        self.refresh_view()
+        try:
+            units = int(self.units_per_strip_in.text().strip() or 0)
+            if units < 0:
+                raise ValueError()
+        except ValueError:
+            self.finish_scan_controls()
+            QMessageBox.warning(self, _("입력 오류"), _("스트립당 Unit 수는 양의 정수로 입력하세요."))
+            return
+        self.scan_thread = IvsScanThread(model, lot, trial_path, units)
         self.scan_thread.progress.connect(self.log)
         self.scan_thread.finished.connect(self.on_scan_finished)
         self.scan_thread.failed.connect(self.on_scan_failed)
-        self.scan_thread.start()
+        self.scan_thread.cancelled.connect(self.on_scan_cancelled)
+        start_worker(self, self.scan_thread)
+
+    def stop_scan(self) -> None:
+        if self.scan_thread and self.scan_thread.isRunning():
+            self._scan_stop_requested = True
+            self.btn_stop.setEnabled(False)
+            self.scan_thread.stop()
+            self.log(_("IVS 수집 중지 요청 — NAS 연결을 정리하는 중입니다."))
+
+    def finish_scan_controls(self) -> None:
+        from PySide6.QtCore import QTimer
+        self.btn_stop.setEnabled(False)
+        if self.scan_thread and self.scan_thread.isRunning():
+            QTimer.singleShot(50, self.finish_scan_controls)
+            return
+        self.btn_scan.setEnabled(True)
+        self.btn_load.setEnabled(True)
+
+    def on_scan_cancelled(self) -> None:
+        self.finish_scan_controls()
+        self.btn_save.setEnabled(False)
+        self.btn_download.setEnabled(False)
+        self.log(_("IVS 수집이 중지되었습니다. 부분 결과는 수율 계산에 연결하지 않습니다."))
 
     def auto_lot(self) -> None:
         lot_id = infer_lot_id_from_values(self.trial_path_in.text(), self.lot_in.text())
@@ -211,7 +262,7 @@ class IvsStudioTab(QWidget):
         self.trial_list_thread = TrialListThread(model, lot)
         self.trial_list_thread.finished.connect(self.on_trials_loaded)
         self.trial_list_thread.failed.connect(self.on_trials_failed)
-        self.trial_list_thread.start()
+        start_worker(self, self.trial_list_thread)
 
     def on_trials_loaded(self, paths: list[str]) -> None:
         self.btn_load_trials.setEnabled(True)
@@ -240,17 +291,23 @@ class IvsStudioTab(QWidget):
             save_line_edit(self.trial_path_in, "ivs/trial_path")
 
     def on_scan_finished(self, payload: dict) -> None:
-        self.btn_scan.setEnabled(True)
+        if getattr(self, '_scan_stop_requested', False):
+            self.on_scan_cancelled()
+            return
+        self.finish_scan_controls()
         self.btn_save.setEnabled(True)
         self.records = load_records_from_payload(payload)
         self.current_payload = payload
+        units = payload.get('population', {}).get('units_per_strip')
+        if units:
+            self.units_per_strip_in.setText(str(units))
         from core.yield_handoff import remember_payload
         remember_payload(payload, 'ivs_json')
         self.refresh_view()
         self.log(_("IVS 스캔 완료"))
 
     def on_scan_failed(self, message: str) -> None:
-        self.btn_scan.setEnabled(True)
+        self.finish_scan_controls()
         QMessageBox.critical(self, _("스캔 실패"), message)
 
     def load_json(self) -> None:
@@ -261,6 +318,26 @@ class IvsStudioTab(QWidget):
             payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
             self.records = load_records_from_payload(payload)
             self.current_payload = payload
+            if payload.get('model'):
+                self.model_in.setText(payload['model'])
+            if payload.get('lot_id'):
+                self.lot_in.setText(payload['lot_id'])
+            self.restore_ivs_units()
+            if payload.get('population', {}).get('units_per_strip'):
+                self.units_per_strip_in.setText(str(payload['population']['units_per_strip']))
+            if 'population' not in payload:
+                # Older IVS JSONs contain only defect strips. A separately
+                # completed StripID extraction can supply the full population.
+                from core.yield_handoff import latest
+                from core.ivs_population import population_payload
+                from core.yield_calc import load_strip_id_json
+                previous = latest()
+                if previous.get('model') == str(payload.get('model', '')).upper() and previous.get('lot') == str(payload.get('lot_id', '')).upper():
+                    source = previous.get('fields', {}).get('strip_json_in', {}).get('value')
+                    if source and Path(source).is_file():
+                        lot, ids = load_strip_id_json(Path(source))
+                        if lot.upper() == str(payload.get('lot_id', '')).upper():
+                            payload['population'] = population_payload(ids, int(self.units_per_strip_in.text() or 0))
             from core.yield_handoff import remember_payload
             remember_payload(payload, 'ivs_json')
             self.btn_save.setEnabled(True)
@@ -278,7 +355,7 @@ class IvsStudioTab(QWidget):
         if not path:
             return
         try:
-            payload = records_to_json(model, lot, self.records)
+            payload = records_to_json(model, lot, self.records, (getattr(self, 'current_payload', None) or {}).get('population'))
             Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             self.log(f"JSON 저장 완료: {path}")
             QMessageBox.information(self, _("저장 완료"), f"정상적으로 저장되었습니다:\n{path}")
@@ -286,18 +363,66 @@ class IvsStudioTab(QWidget):
             import traceback
             QMessageBox.critical(self, _("오류"), f"{str(exc)}\n{traceback.format_exc()}")
 
+    def restore_ivs_units(self) -> None:
+        from core.ivs_population import model_units
+        units = model_units(self.model_in.text().strip())
+        self.units_per_strip_in.setText(str(units) if units else '')
+
+    def update_ivs_rates(self) -> None:
+        from core.ivs_population import population_payload
+        from ui.settings_helper import load_yield_model_settings, save_yield_model_settings
+        try:
+            units = int(self.units_per_strip_in.text().strip() or 0)
+            if units < 0:
+                raise ValueError()
+        except ValueError:
+            return
+        model = self.model_in.text().strip()
+        if units > 0 and model:
+            data = load_yield_model_settings()
+            data.setdefault(model, {})['units_per_strip'] = str(units)
+            save_yield_model_settings(data)
+        payload = getattr(self, 'current_payload', None) or {}
+        original = payload.get('population')
+        if original and str(payload.get('model', '')).upper() == model.upper():
+            population = population_payload(original.get('strip_ids', []), units, original.get('nas_grid_units', []),
+                                            original.get('missing_barcode_folders', 0), original.get('scope', 'lot'),
+                                            original.get('parse_errors', 0))
+            payload['population'] = population
+            payload['summary'] = build_summary(self.records, population['total_units'])
+            from core.yield_handoff import remember_payload
+            remember_payload(payload, 'ivs_json')
+        self.refresh_view()
+
     def refresh_view(self) -> None:
-        summary = build_summary(self.records)
+        population = (getattr(self, 'current_payload', None) or {}).get('population', {})
+        total_units = population.get('total_units')
+        # A numerator outside the verified population indicates inconsistent data.
+        population_ids = set(population.get('strip_ids', []))
+        if total_units and any(r.is_rate_defect and r.strip_id not in population_ids for r in self.records):
+            total_units = None
+        summary = build_summary(self.records, total_units)
         self.summary_label.setText(
-            _("전체 {total_records}건 | 불량 Unit {total_defect_units_excluding_rework_dummy}개 | ") +
-            _("Rework(9998) {rework_9998_count}건 | Dummy {dummy_records}건 | Dummy 9999 {dummy_9999_count}건").format(**summary)
+            (_("전체 {total_records}건 | 불량 Unit {total_defect_units_excluding_rework_dummy}개 | ") +
+             _("Rework(9998) {rework_9998_count}건 | Dummy {dummy_records}건 | Dummy 9999 {dummy_9999_count}건")).format(**summary)
         )
+        if total_units:
+            self.summary_label.setText(self.summary_label.text() + '\n' +
+                (_("선택 Trial 전체 Unit") if population.get('scope') == 'trial' else _("LOT 전체 Unit")) +
+                f": {total_units} ({population['strip_count']} × {population['units_per_strip']})")
+        else:
+            self.summary_label.setText(self.summary_label.text() + '\n' + _("전체 Strip 수·Unit 수 또는 NAS 행·열을 확인할 수 없어 단일 불량률을 표시하지 않습니다."))
+            if population.get('unit_conflict'):
+                self.summary_label.setText(self.summary_label.text() + '\n' + _("NAS 행·열과 설정된 Unit 수가 일치하지 않습니다.") +
+                    f" NAS: {population.get('nas_grid_units', [])} / Unit: {population.get('units_per_strip', 0)}")
         rows = summary["by_defect_type"]
         self.summary_table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             self.summary_table.setItem(row, 0, QTableWidgetItem(str(item["ivs_1"])))
             self.summary_table.setItem(row, 1, QTableWidgetItem(str(item["defect_units"])))
             self.summary_table.setItem(row, 2, QTableWidgetItem(f"{item['rate_percent']}%"))
+            rate = item['single_defect_rate_percent']
+            self.summary_table.setItem(row, 3, QTableWidgetItem(f"{rate:.6f}%" if rate is not None else '—'))
         self.summary_table.resizeColumnsToContents()
         self.refresh_download_groups(rows)
         self.filter_combo.blockSignals(True)
@@ -391,7 +516,7 @@ class IvsStudioTab(QWidget):
         self.strip_search_thread.progress.connect(self.log)
         self.strip_search_thread.finished.connect(lambda payload: self.on_strip_image_search_finished(payload, filters))
         self.strip_search_thread.failed.connect(self.on_strip_image_search_failed)
-        self.strip_search_thread.start()
+        start_worker(self, self.strip_search_thread)
 
     def record_matches_defect_filter(self, record: DefectRecord, filters: list[str]) -> bool:
         if not filters:
@@ -504,7 +629,7 @@ class IvsStudioTab(QWidget):
         self._image_started_request = request
         self.loader_thread.finished.connect(lambda paths, images: self.on_images_loaded(paths, images) if request == self._image_request else None)
         self.loader_thread.failed.connect(lambda msg: self.on_image_load_failed(msg) if request == self._image_request else None)
-        self.loader_thread.start()
+        start_worker(self, self.loader_thread)
 
     def on_image_load_failed(self, message: str) -> None:
         for label in self.image_labels:
@@ -553,7 +678,7 @@ class IvsStudioTab(QWidget):
         self.download_thread.progress.connect(self.log)
         self.download_thread.finished.connect(self.on_download_finished)
         self.download_thread.failed.connect(self.on_download_failed)
-        self.download_thread.start()
+        start_worker(self, self.download_thread)
 
     def on_download_finished(self, saved: int) -> None:
         self.btn_download.setEnabled(True)

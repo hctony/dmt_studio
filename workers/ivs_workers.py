@@ -3,6 +3,7 @@ from __future__ import annotations
 from core.i18n import _
 
 import traceback
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -18,24 +19,48 @@ from core.nas import (
 )
 from core.ivs import parse_ivs_xml, records_to_json, find_ivs_files
 from core.utils import sanitize_filename
+from core.cancellation import OperationCancelled, check_cancelled
 
 
 class IvsScanThread(QThread):
     progress = Signal(str)
     finished = Signal(dict)
     failed = Signal(str)
+    cancelled = Signal()
 
-    def __init__(self, model: str, lot: str, trial_path: str = ""):
+    def __init__(self, model: str, lot: str, trial_path: str = "", units_per_strip=None):
         super().__init__()
         self.model = model
         self.lot = lot
         self.trial_path = trial_path
+        self._cancel = threading.Event()
+        self._ssh = None
+        from core.ivs_population import model_units
+        self.units_per_strip = model_units(model) if units_per_strip is None else int(units_per_strip or 0)
         self.dmt_progress = {'stage': 'NAS 연결 중', 'value': 0, 'max': 0, 'detail': ''}
+
+    def stop(self):
+        self._cancel.set()
+        self.requestInterruption()
+        self.dmt_progress = {**self.dmt_progress, 'stage': 'IVS 수집 중지 중'}
+        ssh = self._ssh
+        if ssh is not None:
+            # Closing the SSH transport releases blocked SFTP reads. Keep this
+            # off the GUI thread, and let run() perform its normal cleanup.
+            def interrupt():
+                try:
+                    ssh.close()
+                except Exception:
+                    pass
+            threading.Thread(target=interrupt, daemon=True).start()
 
     def run(self) -> None:
         ssh = sftp = None
         try:
+            check_cancelled(self._cancel.is_set)
             ssh, sftp = connect()
+            self._ssh = ssh
+            check_cancelled(self._cancel.is_set)
             if self.trial_path.strip():
                 trials = [parse_trial_context(self.trial_path)]
                 model = trials[0].model
@@ -43,40 +68,89 @@ class IvsScanThread(QThread):
             else:
                 model = self.model
                 lot = self.lot
-                trials = list_lot_trials(model, lot, sftp)
+                trials = list_lot_trials(model, lot, sftp, self._cancel.is_set)
             self.progress.emit(f"Trial {len(trials)}개 스캔 시작")
 
             records: list[DefectRecord] = []
+            strip_ids = set()
+            grid_units = set()
+            missing_barcodes = parse_errors = 0
+            parsed_xml_count = 0
+            def observed_strip(barcode, grid):
+                barcode = barcode.strip().upper()
+                if barcode and barcode != 'UNKNOWN' and (not lot or barcode.startswith(lot.strip().upper())):
+                    strip_ids.add(barcode)
+                    if grid:
+                        grid_units.add(grid)
+                    return True
+                return False
             for trial_index, ctx in enumerate(trials, 1):
+                check_cancelled(self._cancel.is_set)
                 detail = f'Trial {trial_index}/{len(trials)} · {ctx.machine}/{ctx.trial}'
                 self.dmt_progress = {'stage': '폴더 검색 중', 'value': 0, 'max': 0, 'detail': detail}
                 valid_indexes = load_valid_bundle_indexes(ctx.path, sftp)
                 if not valid_indexes:
                     self.progress.emit(f"[SKIP] {ctx.machine}/{ctx.trial}: ViaMCName 유효 Bundle 없음")
-                    continue
                 folders = [folder for folder in iter_dirs(sftp, ctx.path)
-                           if folder_index(folder) is not None and folder_index(folder) in valid_indexes]
+                           if folder_index(folder) is not None]
                 xml_count = 0
                 self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': 0, 'max': len(folders), 'detail': detail}
                 for folder_index_done, strip_folder in enumerate(folders):
+                    check_cancelled(self._cancel.is_set)
                     strip_path = f"{ctx.path}/{strip_folder}"
-                    for xml_path in find_ivs_files(strip_path, sftp):
+                    folder_barcodes = []
+                    def collect(barcode, grid):
+                        nonlocal parsed_xml_count
+                        parsed_xml_count += 1
+                        if observed_strip(barcode, grid):
+                            folder_barcodes.append(barcode)
+                    xml_files = find_ivs_files(strip_path, sftp) if folder_index(strip_folder) in valid_indexes else []
+                    for xml_path in xml_files:
+                        check_cancelled(self._cancel.is_set)
                         self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': folder_index_done, 'max': len(folders), 'detail': f'{detail} · Strip {folder_index_done}/{len(folders)} · XML {xml_count} · {strip_folder}'}
-                        parsed = parse_ivs_xml(xml_path, sftp, ctx, strip_folder, self.progress.emit)
+                        before = parsed_xml_count
+                        parsed = parse_ivs_xml(xml_path, sftp, ctx, strip_folder, self.progress.emit, self._cancel.is_set, collect)
+                        if parsed_xml_count == before:
+                            parse_errors += 1
                         xml_count += 1
                         if parsed:
                             records.extend(parsed)
+                    if not folder_barcodes:
+                        check_cancelled(self._cancel.is_set)
+                        fc = find_fc_file(strip_path, strip_folder, sftp)
+                        barcode = read_barcode_from_xml(fc, sftp) if fc else None
+                        check_cancelled(self._cancel.is_set)
+                        if barcode and observed_strip(barcode, 0):
+                            pass
+                        elif fc or folder_index(strip_folder) in valid_indexes:
+                            missing_barcodes += 1
                     self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': folder_index_done + 1, 'max': len(folders), 'detail': f'{detail} · Strip {folder_index_done + 1}/{len(folders)} · XML {xml_count}'}
                 self.progress.emit(f"[{ctx.machine}/{ctx.trial}] 누적 {len(records)}건")
 
-            self.finished.emit(records_to_json(model, lot, records))
+            check_cancelled(self._cancel.is_set)
+            from core.ivs_population import population_payload
+            missing_barcodes += len({record.strip_id for record in records if record.is_rate_defect} - strip_ids)
+            population = population_payload(strip_ids, self.units_per_strip, grid_units, missing_barcodes,
+                                            'trial' if self.trial_path.strip() else 'lot', parse_errors)
+            population['xml_count'] = parsed_xml_count
+            payload = records_to_json(model, lot, records, population)
+            check_cancelled(self._cancel.is_set)
+            self.finished.emit(payload)
+        except OperationCancelled:
+            self.cancelled.emit()
         except Exception:
-            self.failed.emit(traceback.format_exc())
+            if self._cancel.is_set():
+                self.cancelled.emit()
+            else:
+                self.failed.emit(traceback.format_exc())
         finally:
-            if sftp:
-                sftp.close()
-            if ssh:
-                ssh.close()
+            for connection in (sftp, ssh):
+                if connection:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+            self._ssh = None
 
 
 class StripDefectSearchThread(QThread):

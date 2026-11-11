@@ -397,6 +397,13 @@ class GuiTests(unittest.TestCase):
             records=load_records_from_payload(payloads[0]);self.assertEqual(len(records),1)
             dest=self.root/'images';result=[];worker=DownloadThread(records,str(dest),'SM03');worker.finished.connect(result.append);worker.run();self.assertEqual(result,[3]);self.assertEqual(len(list(dest.rglob('*.png'))),3)
 
+    def test_remote_preview_is_bounded_but_original_image_and_full_logs_stay_in_backend(self):
+        from PySide6.QtGui import QPixmap,QImage
+        import base64
+        tab=self.tab(0);pix=QPixmap(3200,1600);pix.fill(C.Qt.red);label=tab.image_labels[0];label.setProperty('dmt_full_pixmap',pix)
+        data=self.c.widget(label)['src'];preview=QImage.fromData(base64.b64decode(data.split(',',1)[1]));self.assertEqual(preview.width(),1600);self.assertEqual(label.property('dmt_full_pixmap').width(),3200)
+        text='a'*80000;tab.info.setPlainText(text);view=self.c.widget(tab.info);self.assertEqual(len(view['text']),50000);self.assertTrue(view['truncated']);self.assertEqual(tab.info.toPlainText(),text)
+
     def test_remote_revalidates_inherited_paths_and_locks_busy_inputs(self):
         tab=self.tab(6)
         for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):

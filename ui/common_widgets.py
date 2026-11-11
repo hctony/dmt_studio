@@ -33,7 +33,8 @@ def start_line_edit_lot_lookup(
         )
     )
     thread.failed.connect(lambda message: fail_line_edit_lot_lookup(owner, list(buttons), message))
-    thread.start()
+    from ui.worker_lifetime import start_worker
+    start_worker(owner, thread)
 
 
 def finish_line_edit_lot_lookup(
