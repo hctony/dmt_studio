@@ -4,4 +4,5 @@ python-barcode>=0.15.1
 paramiko>=3.0.0
 smbprotocol>=1.11.0
 pyinstaller>=6.0.0
+psutil>=6.0.0
 pywin32>=306; platform_system == "Windows"

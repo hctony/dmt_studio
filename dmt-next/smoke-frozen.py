@@ -14,7 +14,7 @@ assert (backend.parent/'_internal/resources/templates/report.xlsx').is_file(), '
 with tempfile.TemporaryDirectory() as data:
     requests = [{'id':1,'method':'gui.snapshot'}, {'id':2,'method':'workflow.status'},
         {'id':3,'method':'gui.import-models','args':{'data':{'PACKAGED-TEST':{'units_per_strip':'88','xout_limit':'18','vrs_txt_paths':r'Z:\Taiwan\LOT.txt','ski_path':''}}}},
-        {'id':4,'method':'gui.models'}]
+        {'id':4,'method':'gui.models'}, {'id':5,'method':'gui.resource-check'}]
     result = subprocess.run([str(backend),'--gui'],
         input=''.join(json.dumps(r)+'\n' for r in requests), text=True, encoding='utf8',
         capture_output=True, env=dict(os.environ,DMT_DATA_DIR=data,QT_QPA_PLATFORM='offscreen'),cwd=data,timeout=45)
@@ -25,6 +25,7 @@ with tempfile.TemporaryDirectory() as data:
     assert messages[2]['result']['preferences']['autofill'] is False, messages
     assert messages[3]['result']['count'] == 1, messages
     assert messages[4]['result']['selected'] == 'PACKAGED-TEST', messages
+    assert messages[5]['result']['rssBytes'] > 0, messages
     saved = json.loads((Path(data)/'gui-inputs.json').read_text(encoding='utf-8'))
     assert saved['6/YieldTab:/xout_limit_in'] == '18', saved
     assert saved['6/YieldTab:/vrs_txt_in'] == r'Z:\Taiwan\LOT.txt', saved

@@ -15,3 +15,6 @@ yield_model_settings.json
 **/node-compile-cache/
 **/gather-index.sqlite*
 **/yield-handoff/
+**/remote-sessions/
+**/network-server.json
+**/measurements.jsonl*

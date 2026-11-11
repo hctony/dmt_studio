@@ -20,10 +20,12 @@ jobs:
       - run: npm ci
         working-directory: dmt-next
       - run: python -m unittest discover -s dmt-next -p 'test_*.py'
-      - run: node --test dmt-next/test-updater.cjs dmt-next/test-gui-client.cjs dmt-next/test-lifecycle.cjs
+      - run: node --test dmt-next/test-updater.cjs dmt-next/test-gui-client.cjs dmt-next/test-lifecycle.cjs dmt-next/test-network-server.cjs
       - run: ./node_modules/.bin/electron.cmd smoke-tray.cjs
         working-directory: dmt-next
       - run: ./node_modules/.bin/electron.cmd smoke-yield-handoff.cjs
+        working-directory: dmt-next
+      - run: ./node_modules/.bin/electron.cmd smoke-network.cjs
         working-directory: dmt-next
       - run: ./dmt-next/build.ps1
       - run: python dmt-next/smoke-frozen.py

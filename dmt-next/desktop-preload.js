@@ -1,5 +1,15 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('studio',{
+  networkStatus:()=>ipcRenderer.invoke('network:status'),
+  configureNetwork:args=>ipcRenderer.invoke('network:configure',args),
+  startServer:()=>ipcRenderer.invoke('network:start'),
+  stopServer:()=>ipcRenderer.invoke('network:stop'),
+  chooseNetworkRoot:()=>ipcRenderer.invoke('network:root'),
+  copyAccessKey:name=>ipcRenderer.invoke('network:copy',name),
+  cancelQueued:name=>ipcRenderer.invoke('network:cancel',name),
+  connectClient:url=>ipcRenderer.invoke('network:client',url),
+  measure:value=>ipcRenderer.invoke('measurement:enabled',value),
+  exportMeasurements:()=>ipcRenderer.invoke('measurement:export'),
   workflow:(method,args)=>ipcRenderer.invoke('workflow:call',method,args),
   exportWorkflows:()=>ipcRenderer.invoke('workflow:export'),
   language:value=>ipcRenderer.invoke('ui:language',value),

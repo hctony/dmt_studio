@@ -7,12 +7,16 @@ from pathlib import Path
 from config import DATA_DIR
 
 
+def index_path():
+    return Path(os.environ.get('DMT_CACHE_DIR', str(DATA_DIR / 'cache'))) / 'gather-index.sqlite'
+
+
 def read_indexed_lines(path, stat, lot, reader, stats=None):
     def count(key):
         if stats is not None:
             stats[key] = stats.get(key, 0) + 1
     signature = json.dumps([stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size])
-    db = DATA_DIR / 'cache' / 'gather-index.sqlite'
+    db = index_path()
     lines = None
     connection = None
     key = os.path.abspath(path)
@@ -62,7 +66,7 @@ def recent_file(stat, cutoff):
 
 
 def clear_index():
-    db = DATA_DIR / 'cache' / 'gather-index.sqlite'
+    db = index_path()
     if db.is_file():
         with sqlite3.connect(db, timeout=10) as connection:
             connection.execute('DELETE FROM files')

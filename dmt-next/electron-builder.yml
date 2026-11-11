@@ -8,6 +8,8 @@ files:
   - gui-client.js
   - updater.js
   - lifecycle.js
+  - network-server.js
+  - measurement.js
   - assets/tray.ico
   - ui/studio.html
   - ui/studio.js
@@ -15,6 +17,8 @@ files:
   - ui/workflow.js
   - ui/update-dialog.js
   - ui/backend-recovery.js
+  - ui/network-panel.js
+  - ui/remote-client.js
   - ui/studio.css
   - ui/translations.js
   - ui/translations.json

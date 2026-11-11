@@ -4,7 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const {app} = require('electron');
 class GuiClient {
-  constructor(onEvent) { this.onEvent=onEvent;this.pending=new Map();this.sequence=0;this.busy=false;this.snapshot=null;this.child=null;this.failure=null; }
+  constructor(onEvent, options={}) { this.onEvent=onEvent;this.options=options;this.pending=new Map();this.sequence=0;this.busy=false;this.snapshot=null;this.child=null;this.failure=null; }
   start() {
     if(this.child)return;
     const exe=app.isPackaged?path.join(process.resourcesPath,'backend','dmt-service.exe'):(process.env.DMT_PYTHON||'python');
@@ -15,7 +15,8 @@ class GuiClient {
       if(missing.length){this.failure=new Error('BACKEND_FILES_MISSING: '+missing.join(', '));this.onEvent({event:'backend-error',error:this.failure.message});throw this.failure;}
     }
     const args=app.isPackaged?['--gui']:['-u',path.join(__dirname,'legacy_bridge.py'),'--gui'];
-    const child=spawn(exe,args,{cwd:app.getPath('userData'),env:{...process.env,DMT_DATA_DIR:app.getPath('userData'),QT_QPA_PLATFORM:'offscreen'},windowsHide:true,stdio:['pipe','pipe','pipe']});
+    const dataDir=this.options.dataDir||app.getPath('userData');
+    const child=spawn(exe,args,{cwd:dataDir,env:{...process.env,DMT_DATA_DIR:dataDir,QT_QPA_PLATFORM:'offscreen',...this.options.env},windowsHide:true,stdio:['pipe','pipe','pipe']});
     this.child=child;let stderr='';
     child.stderr.on('data',data=>{stderr=(stderr+data.toString()).slice(-6000);});
     child.stdin.on('error',()=>{});

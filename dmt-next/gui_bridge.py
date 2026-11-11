@@ -130,10 +130,17 @@ class Controller(C.QObject):
         return tasks
 
     def busy(self):
+        if self.open_dialogs():
+            return True
         for owner in [self.window, *self.window.findChildren(W.QWidget)]:
             for value in vars(owner).values():
                 if isinstance(value,C.QThread) and shiboken6.isValid(value) and value.isRunning(): return True
         return bool(self.waiters)
+
+    def open_dialogs(self):
+        return [widget for widget in self.app.topLevelWidgets()
+                if isinstance(widget, W.QDialog) and widget.isVisible()
+                and any(parent is self.window for parent in self._parents(widget))]
 
     def register(self,w):
         key=str(id(w)); self.widgets[key]=w; return key
@@ -193,8 +200,13 @@ class Controller(C.QObject):
         return dict(d,title=w.title() if isinstance(w,W.QGroupBox) else '',type='group' if isinstance(w,W.QGroupBox) else 'container',form=isinstance(w.layout(),W.QFormLayout),horizontal=isinstance(w.layout(),W.QHBoxLayout),children=self.layout(w.layout()))
 
     def snapshot(self):
-        dialogs=[w for w in self.app.topLevelWidgets() if isinstance(w,W.QDialog) and w.isVisible()]
-        return {'root':self.widget(self.window.centralWidget()),'dialogs':[{'title':w.windowTitle(),'id':self.register(w),'content':self.widget(w)} for w in dialogs], 'busy':self.busy(), 'tasks':self.task_progress()}
+        dialogs=self.open_dialogs()
+        tabs = self.window.centralWidget()
+        context = {'tab': tabs.currentIndex(), 'label': tabs.tabText(tabs.currentIndex())}
+        for key, widget in self.input_widgets():
+            if key.startswith(str(tabs.currentIndex()) + '/') and key.rsplit('/', 1)[-1] in ('model_in', 'lot_in'):
+                context[key.rsplit('/', 1)[-1]] = widget.text()
+        return {'root':self.widget(tabs),'dialogs':[{'title':w.windowTitle(),'id':self.register(w),'content':self.widget(w)} for w in dialogs], 'busy':self.busy(), 'tasks':self.task_progress(), 'context':context}
 
     def publish(self):
         try:
@@ -213,6 +225,34 @@ class Controller(C.QObject):
                 if record: record['value']=a.get('value');record['loop'].quit()
                 result=True
             elif method=='gui.snapshot': result=self.snapshot()
+            elif method=='gui.export-settings':
+                from config import APP_SETTINGS
+                result = {key: APP_SETTINGS.value(key) for key in APP_SETTINGS.allKeys()}
+            elif method=='gui.resource-check':
+                import psutil
+                process = psutil.Process()
+                result = {'pid': process.pid, 'rssBytes': process.memory_info().rss, 'logicalCpus': psutil.cpu_count()}
+            elif method=='gui.archive-results':
+                if self.busy():
+                    raise ValueError('작업 완료 후 다운로드하세요. / 請先完成工作再下載。')
+                import zipfile
+                from uuid import uuid4
+                directory = self.input_path.parent / 'outputs'
+                files = [file for file in directory.rglob('*') if file.is_file() and not file.is_symlink()
+                         and file.suffix.lower() != '.zip' and not any(part.startswith('.') for part in file.relative_to(directory).parts)
+                         and file.resolve().is_relative_to(directory.resolve())]
+                if not files or len(files) > 10000:
+                    raise ValueError('묶음 다운로드는 결과 파일 1–10000개까지 가능합니다. / 批次下載支援 1–10000 個結果檔案。')
+                name = 'DMT-results-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid4().hex[:8] + '.zip'
+                temporary = directory / ('.' + name + '.tmp')
+                try:
+                    with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+                        for file in files:
+                            archive.write(file, file.relative_to(directory).as_posix())
+                    temporary.replace(directory / name)
+                finally:
+                    temporary.unlink(missing_ok=True)
+                result = {'name': name}
             elif method=='gui.image-step':
                 tabs=self.window.centralWidget()
                 if tabs.currentIndex()==0 and not self.waiters and not any(isinstance(w,W.QDialog) and w.isVisible() for w in self.app.topLevelWidgets()):
@@ -233,6 +273,22 @@ class Controller(C.QObject):
                 if w is None or not shiboken6.isValid(w): raise ValueError('Control no longer exists')
                 if not w.isEnabled(): raise ValueError('Control is disabled')
                 action=a['action'];v=a.get('value')
+                if os.environ.get('DMT_REMOTE_SESSION') == '1':
+                    in_dialog = any(isinstance(parent, W.QDialog) for parent in self._parents(w))
+                    if self.busy() and not in_dialog and action in ('input', 'text', 'edit-select', 'select', 'date', 'check', 'click'):
+                        if not (action == 'click' and w.text() in ('중지', '취소', '닫기')):
+                            raise ValueError('현재 작업 완료 후 사용하세요. / 請先完成目前工作。')
+                    if self.window.centralWidget().currentIndex() == 8 and action == 'click' and w.text() == 'BK 이동 / PMK 저장':
+                        raise ValueError('원본 변경 작업은 A PC에서 실행하세요. / 請在 A 電腦執行原始資料變更。')
+                    if action in ('input', 'text', 'edit-select') and isinstance(v, str):
+                        from remote_paths import validate_input
+                        validate_input(self, w, v)
+                    if action == 'click' and not in_dialog and w.text() not in ('중지', '취소', '닫기') and not any(word in w.text() for word in ('선택', '열기', '불러오기', '변경', '내보내기', '저장', '초기화', '지우기')):
+                        from remote_paths import validate_input
+                        prefix = str(self.window.centralWidget().currentIndex()) + '/'
+                        for input_key, input_widget in self.input_widgets():
+                            if input_key.startswith(prefix) and isinstance(input_widget, W.QLineEdit):
+                                validate_input(self, input_widget, input_widget.text())
                 if action=='click' and isinstance(w,W.QAbstractButton):
                     started=time.monotonic();tab=self.window.centralWidget().currentIndex()
                     self.action_depth+=1
@@ -272,6 +328,12 @@ class Controller(C.QObject):
             self.workflow.history.record('bridge_error',error=self.workflow.history.clean(exc))
             self.emit({'id':request.get('id'),'error':str(exc)})
 
+    @staticmethod
+    def _parents(widget):
+        while widget is not None:
+            yield widget
+            widget = widget.parentWidget()
+
 
 def run():
     sys.stdin.reconfigure(encoding='utf-8');sys.stdout.reconfigure(encoding='utf-8')
@@ -285,10 +347,12 @@ def run():
     sys.excepthook=report_exception
     app=W.QApplication([]);app.setQuitOnLastWindowClosed(False)
     controller=Controller(app,emit)
+    from resource_monitor import start_monitor
+    monitor = start_monitor(emit)
     def reader():
         for line in sys.stdin:
             try: controller.incoming.emit(json.loads(line))
             except Exception as exc: emit({'error':str(exc)})
         C.QMetaObject.invokeMethod(app,'quit',C.Qt.QueuedConnection)
     threading.Thread(target=reader,daemon=True).start()
-    controller.publish();app.exec()
+    controller.publish();app.exec();monitor.set()

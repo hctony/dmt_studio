@@ -1,0 +1,97 @@
+/* LAN gateway. Each access key owns an independent original backend process. */
+const http=require('node:http'),fs=require('node:fs/promises'),sync=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
+const {pipeline}=require('node:stream/promises');
+const deny=message=>{const e=new Error(message);e.status=403;return e;};
+const within=(root,file)=>{const relative=path.relative(root,file);return relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative));};
+const protectedPath=file=>file.split(/[\\/]/).some(p=>['.env','.git','.ssh','.aws','network-server.json'].includes(p.toLowerCase()));
+const controls=widget=>widget?[widget,...(widget.children||[]).flatMap(controls),...controls(widget.content)]:[];
+const json=(res,value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
+async function body(req,limit=2*1024*1024){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit){const e=new Error('파일/요청이 너무 큽니다. / 檔案或請求過大。');e.status=413;throw e;}chunks.push(chunk);}return Buffer.concat(chunks);}
+class NetworkServer {
+ constructor({root,uiDir,createClient,seed,local,measurement,version}){
+  Object.assign(this,{root,uiDir,createClient,seed,local,measurement,version});this.sessions=new Map();this.opening=new Map();this.queue=[];this.leases=new Set();this.server=null;this.accepting=false;this.authFailures=new Map();this.tickets=new Map();this.transfers=0;
+  this.config={enabled:false,host:'0.0.0.0',port:8765,concurrency:1,roots:[],clients:['B','C','D'].map(name=>({name,token:crypto.randomBytes(32).toString('hex')}))};
+  this.localSession={id:'A',name:'A (local)',client:local,events:[],seq:0,inFlight:0,queued:false};
+ }
+ async initialize(){try{const saved=JSON.parse(await fs.readFile(path.join(this.root,'network-server.json'),'utf8'));this.config={...this.config,...saved};}catch(e){if(e.code!=='ENOENT')this.startupError=e.message;}
+  if(this.config.enabled){try{await this.start();}catch(e){this.startupError=e.message;}}return this.status();
+ }
+ async persist(){const target=path.join(this.root,'network-server.json');await fs.writeFile(target+'.tmp',JSON.stringify(this.config,null,2),{mode:0o600});await fs.rename(target+'.tmp',target);}
+ addresses(){const port=this.server?.address()?.port||this.config.port;const addresses=new Set(['127.0.0.1']);if(this.config.host!=='0.0.0.0')addresses.add(this.config.host);else for(const list of Object.values(os.networkInterfaces()))for(const a of list||[])if(a.family==='IPv4'&&!a.internal)addresses.add(a.address);return [...addresses].map(a=>`http://${a}:${port}`);}
+ status(){return {running:!!this.server,accepting:this.accepting,config:this.config,urls:this.addresses(),startupError:this.startupError||null,queued:this.queue.length,active:this.leases.size,sessions:[this.localSession,...this.sessions.values()].map(s=>({name:s.name,status:s.queued?'queued':this.leases.has(s)?'running':s.client.failure?'error':'idle',context:s.client.snapshot?.context||{},error:s.client.failure?.message||null})),measurement:this.measurement.report()};}
+ get busy(){return this.leases.size>0||this.queue.length>0||this.opening.size>0||this.transfers>0||[...this.sessions.values()].some(s=>s.client.busy||s.inFlight>0);}
+ async configure(values){if(this.busy||this.local.busy||this.local.pending.size)throw new Error('작업 완료 후 설정하세요. / 請先完成工作。');
+  const port=Number(values.port),concurrency=Number(values.concurrency);if(!Number.isInteger(port)||port<1024||port>65535||!Number.isInteger(concurrency)||concurrency<1||concurrency>4)throw new Error('포트 1024–65535 / 동시 처리 1–4 / 連接埠 1024–65535，同時處理 1–4');
+  if(!Array.isArray(values.roots)||values.roots.length>30)throw new Error('Invalid roots');const roots=[];for(const value of values.roots){if(typeof value!=='string'||!path.isAbsolute(value)||protectedPath(value))throw new Error('절대 폴더 경로를 입력하세요. / 請輸入絕對資料夾路徑。');roots.push(path.resolve(value));}
+  if(this.server)await this.stop(false);this.config={...this.config,port,concurrency,roots};await this.persist();return this.status();
+ }
+ async start(){if(this.server)return this.status();
+  const server=http.createServer((req,res)=>this.request(req,res).catch(e=>{if(!res.headersSent)json(res,{error:e.message},e.status||400);else res.destroy();}));server.headersTimeout=15000;server.requestTimeout=30000;server.maxHeadersCount=40;
+  server.on('clientError',(_e,socket)=>socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'));
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(this.config.port,this.config.host,()=>{server.removeListener('error',reject);resolve();});});
+  server.on('error',e=>{this.startupError=e.message;});this.server=server;this.accepting=true;this.startupError=null;this.config.enabled=true;await this.persist();return this.status();
+ }
+ async stop(persist=true){if(this.busy)throw new Error('원격 작업/대기 작업을 먼저 완료하세요. / 請先完成遠端及排隊工作。');this.accepting=false;const server=this.server;this.server=null;if(server){server.closeIdleConnections();await new Promise(resolve=>server.close(resolve));}
+  for(const s of this.sessions.values())await s.client.stopForUpdate();this.sessions.clear();if(persist){this.config.enabled=false;await this.persist();}return this.status();
+ }
+ close(){this.accepting=false;this.server?.closeAllConnections();this.server?.close();this.server=null;for(const s of this.sessions.values())s.client.close();this.sessions.clear();}
+ authenticate(req){const raw=String(req.headers.authorization||'').replace(/^Bearer /,'');let client;for(const c of this.config.clients){const a=Buffer.from(raw),b=Buffer.from(c.token);if(a.length===b.length&&crypto.timingSafeEqual(a,b))client=c;}if(!client){const now=Date.now();const ip=req.socket.remoteAddress;const failures=(this.authFailures.get(ip)||[]).filter(t=>now-t<60000);failures.push(now);this.authFailures.set(ip,failures);const e=new Error('접속 키를 확인하세요. / 請確認連線金鑰。');e.status=failures.length>30?429:401;throw e;}return client;}
+ async getSession(identity){const id=crypto.createHash('sha256').update(identity.token).digest('hex').slice(0,24);if(this.sessions.has(id))return this.sessions.get(id);if(this.opening.has(id))return this.opening.get(id);
+  const promise=(async()=>{const dir=path.join(this.root,'remote-sessions',id);const fresh=!sync.existsSync(path.join(dir,'gui-inputs.json'));await fs.mkdir(path.join(dir,'outputs'),{recursive:true});await fs.mkdir(path.join(dir,'uploads'),{recursive:true});
+   if(fresh){const settings=await this.seed();await fs.writeFile(path.join(dir,'settings-seed.json'),JSON.stringify(settings));for(const name of ['gui-inputs.json','yield_model_settings.json','.env']){try{await fs.copyFile(path.join(this.root,name),path.join(dir,name));}catch(e){if(e.code!=='ENOENT')throw e;}}try{await fs.mkdir(path.join(dir,'templates'),{recursive:true});await fs.copyFile(path.join(this.root,'templates/report.xlsx'),path.join(dir,'templates/report.xlsx'));}catch(e){if(e.code!=='ENOENT')throw e;}}
+   // Connection credentials remain on A. Refresh them before each new process.
+   try{await fs.copyFile(path.join(this.root,'.env'),path.join(dir,'.env'));}catch(e){if(e.code!=='ENOENT')throw e;}
+   const s={id,name:identity.name,dir,events:[],seq:0,inFlight:0,queued:false};
+   s.client=this.createClient(e=>this.observe(s,e),{dataDir:dir,env:{DMT_REMOTE_SESSION:'1',DMT_SETTINGS_FILE:path.join(dir,'settings.ini'),DMT_CACHE_DIR:path.join(this.root,'cache'),DMT_ALLOWED_ROOTS:JSON.stringify(this.config.roots)}});
+   this.sessions.set(id,s);try{await s.client.call('gui.snapshot');return s;}catch(e){this.sessions.delete(id);s.client.close();throw e;}
+  })();this.opening.set(id,promise);try{return await promise;}finally{this.opening.delete(id);}
+ }
+ observe(s,event){this.measurement.observe(s.id,event);if(event.event==='resources'||event.event==='resources-unavailable')return;
+  s.seq++;if(event.event==='snapshot'){s.lastSnapshot={...event,seq:s.seq};s.client.snapshot=event.snapshot;s.client.busy=event.snapshot.busy;}else{s.events.push({...event,seq:s.seq});s.events=s.events.slice(-100);}
+  if(event.event==='dialog'){s.pendingDialog=event.dialog;if(['file','files','directory','save'].includes(event.dialog.kind))s.fileDialog=event.dialog;}
+  if(event.event==='backend-error')s.failed=true;
+  this.release(s);
+ }
+ observeLocal(event){this.measurement.observe('A',event);if(event.event==='snapshot')this.release(this.localSession);if(event.event==='backend-error'){this.localSession.failed=true;this.release(this.localSession);}}
+ release(s){if(this.leases.has(s)&&!s.inFlight&&(!s.client.busy||s.client.failure)){this.leases.delete(s);this.measurement.end(s.id,!!s.failed);this.drain();}}
+ drain(){while(this.queue.length&&this.leases.size<this.config.concurrency){const entry=this.queue.shift();entry.s.queued=false;this.acquire(entry.s,entry.waited);entry.resolve();}}
+ acquire(s,waited){s.failed=false;this.leases.add(s);this.measurement.begin(s.id,s.nextContext||s.client.snapshot?.context||{},Date.now()-waited);}
+ async admission(s){if(this.leases.has(s))return;if(s.queued)throw new Error('이미 대기 중입니다. / 已在排隊中。');const waited=Date.now();if(this.leases.size<this.config.concurrency){this.acquire(s,waited);return;}if(this.queue.length>=24)throw new Error('대기열이 가득 찼습니다. / 佇列已滿。');s.queued=true;await new Promise((resolve,reject)=>this.queue.push({s,resolve,reject,waited}));}
+ cancelQueued(name){const i=this.queue.findIndex(e=>e.s.name===name);if(i<0)return false;const [entry]=this.queue.splice(i,1);entry.s.queued=false;entry.reject(new Error('대기 작업을 취소했습니다. / 已取消排隊工作。'));return true;}
+ async invoke(s,method,args={}){if(s.queued&&method!=='gui.snapshot'&&method!=='dialog.reply')throw new Error('대기 중에는 입력을 변경할 수 없습니다. / 排隊時無法變更輸入。');
+  const admitted=method==='gui.action'&&args.action==='click';if(admitted){const control=controls(s.client.snapshot?.root).find(w=>w.id===args.id);s.nextContext={...s.client.snapshot?.context,clientName:s.name,control:control?.text||''};if(control?.text==='중지'&&this.measurement.active.get(s.id))this.measurement.active.get(s.id).cancelled=true;await this.admission(s);}s.inFlight++;
+  try{const result=await s.client.call(method,args);if(admitted){const state=await s.client.call('gui.snapshot');s.client.snapshot=state;s.client.busy=!!state.busy;}return result;}catch(e){if(admitted)s.failed=true;throw e;}finally{s.inFlight--;this.release(s);}
+ }
+ async localCall(method,args){return this.invoke(this.localSession,method,args);}
+ async checkedPath(s,value){if(typeof value!=='string'||protectedPath(value))throw deny('허용되지 않은 경로 / 不允許的路徑');const actual=await fs.realpath(path.resolve(value));const roots=[...this.config.roots,path.join(s.dir,'outputs'),path.join(s.dir,'uploads')];for(const root of roots){try{if(within(await fs.realpath(root),actual)&&!protectedPath(actual))return actual;}catch{}}throw deny('A PC에서 허용한 폴더만 사용할 수 있습니다. / 僅能使用 A 電腦允許的資料夾。');}
+ async browse(s,value){if(!value)return {roots:[...this.config.roots,path.join(s.dir,'outputs'),path.join(s.dir,'uploads')]};const file=await this.checkedPath(s,value);const stat=await fs.stat(file);if(!stat.isDirectory())return {file};const entries=await fs.readdir(file,{withFileTypes:true});return {path:file,parent:path.dirname(file),entries:entries.filter(e=>!protectedPath(e.name)&&!e.isSymbolicLink()).sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name)).slice(0,2000).map(e=>({name:e.name,path:path.join(file,e.name),directory:e.isDirectory()}))};}
+ async files(s){const root=path.join(s.dir,'outputs');const list=[];const visit=async(dir,depth)=>{if(depth>8||list.length>=10000)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.name.startsWith('.')||e.isSymbolicLink())continue;const file=path.join(dir,e.name);if(e.isDirectory())await visit(file,depth+1);else if(e.isFile()){const stat=await fs.stat(file);list.push({name:path.relative(root,file).split(path.sep).join('/'),size:stat.size,modified:stat.mtimeMs});}if(list.length>=10000)break;}};await visit(root,0);return list.sort((a,b)=>b.modified-a.modified);}
+ async archive(s){if(s.archiving||s.queued||s.client.busy||s.inFlight)throw new Error('작업 완료 후 다운로드하세요. / 請先完成工作再下載。');s.archiving=true;s.nextContext={...s.client.snapshot?.context,clientName:s.name,control:'결과 ZIP 다운로드'};try{await this.admission(s);s.inFlight++;try{return await s.client.call('gui.archive-results');}finally{s.inFlight--;this.release(s);}}finally{s.archiving=false;}}
+ async download(s,name,res){if(typeof name!=='string'||!name||path.isAbsolute(name)||name.split(/[\\/]/).some(p=>p==='..'||p.startsWith('.')))throw deny('Invalid file');const file=await this.checkedPath(s,path.join(s.dir,'outputs',name));if(!within(path.join(s.dir,'outputs'),file))throw deny('Invalid file');const stat=await fs.stat(file);if(!stat.isFile())throw deny('Invalid file');this.transfers++;try{res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Length':stat.size,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(path.basename(name))}`,'Cache-Control':'no-store'});await pipeline(sync.createReadStream(file),res);}finally{this.transfers--;}}
+ async reply(s,args){const d=s.fileDialog;let result;if(d&&d.id===args.id){let value=args.value;if(value){if(d.kind==='save'){const name=path.basename(String(value));if(!name||name!==value||name.startsWith('.')||name.length>180||/[<>:"/\\|?*\x00-\x1f]/.test(name))throw deny('파일명만 입력하세요. / 請僅輸入檔名。');value=path.join(s.dir,'outputs',name);}else{const values=Array.isArray(value)?value:[value];for(const item of values)await this.checkedPath(s,item);if(d.kind==='directory'&&/저장/.test(d.title)){value=path.join(s.dir,'outputs');}}}s.fileDialog=null;result=await this.invoke(s,'dialog.reply',{id:args.id,value});}else result=await this.invoke(s,'dialog.reply',args);if(s.pendingDialog?.id===args.id)s.pendingDialog=null;return result;}
+ async request(req,res){res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
+  const host=String(req.headers.host||'').toLowerCase();const allowed=new Set(this.addresses().map(v=>new URL(v).host));for(const name of ['localhost',os.hostname().toLowerCase(),os.hostname().toLowerCase()+'.local'])allowed.add(`${name}:${this.server?.address()?.port||this.config.port}`);if(!allowed.has(host))throw deny('Invalid host');
+  if(req.headers.origin&&req.headers.origin!==`http://${host}`)throw deny('Invalid origin');
+  const url=new URL(req.url,`http://${host}`);const route=url.pathname;
+  if(!route.startsWith('/api/')){if(req.method!=='GET')throw deny('Method not allowed');const assets=new Set(['studio.js','studio.css','translations.js','model-settings.js','workflow.js','update-dialog.js','backend-recovery.js','remote-client.js']);let name=route.slice(1);let content;
+   if(route==='/'){content=await fs.readFile(path.join(this.uiDir,'studio.html'),'utf8');content=content.replace("connect-src 'none'","connect-src 'self'").replace('<script src="studio.js">','<script src="remote-client.js"></script><script src="studio.js">').replace('<script src="network-panel.js"></script>','');res.setHeader('Content-Type','text/html; charset=utf-8');}
+   else{if(!assets.has(name))throw deny('Not found');content=await fs.readFile(path.join(this.uiDir,name));res.setHeader('Content-Type',name.endsWith('.css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');}
+   res.setHeader('Cache-Control','no-store');res.end(content);return;
+  }
+  if(!this.accepting)throw new Error('서버가 종료 중입니다. / 伺服器正在關閉。');
+  if(route==='/api/file'&&req.method==='GET'){const key=url.searchParams.get('ticket');const ticket=this.tickets.get(key);if(!ticket||ticket.expires<Date.now())throw deny('Download link expired');this.tickets.delete(key);await this.download(ticket.session,ticket.name,res);return;}
+  const identity=this.authenticate(req);const s=await this.getSession(identity);
+  if(route==='/api/events'&&req.method==='GET'){const after=Number(url.searchParams.get('after'))||0;const events=s.events.filter(e=>e.seq>after&&(e.event!=='dialog'||e.dialog.id===s.pendingDialog?.id));if(s.lastSnapshot?.seq>after)events.push(s.lastSnapshot);events.sort((a,b)=>a.seq-b.seq);json(res,{seq:s.seq,events,queue:s.queued,active:this.leases.has(s),name:s.name});return;}
+  if(route==='/api/files'&&req.method==='GET'){json(res,await this.files(s));return;}
+  if(route==='/api/archive'&&req.method==='POST'){json(res,await this.archive(s));return;}
+  if(route==='/api/download-ticket'&&req.method==='POST'){const {name}=JSON.parse((await body(req)).toString());if(!(await this.files(s)).some(f=>f.name===name))throw deny('Invalid file');for(const [key,value] of this.tickets)if(value.expires<Date.now())this.tickets.delete(key);if(this.tickets.size>=128)throw new Error('다운로드 요청이 많습니다. 잠시 후 다시 시도하세요. / 下載請求過多，請稍後再試。');const ticket=crypto.randomBytes(24).toString('hex');this.tickets.set(ticket,{name,session:s,expires:Date.now()+120000});json(res,{ticket});return;}
+  if(route==='/api/cancel-queued'&&req.method==='POST'){json(res,{cancelled:this.cancelQueued(s.name)});return;}
+  if(route==='/api/browse'&&req.method==='POST'){const args=JSON.parse((await body(req)).toString());json(res,await this.browse(s,args.path));return;}
+  if(route==='/api/download'&&req.method==='GET'){await this.download(s,url.searchParams.get('name'),res);return;}
+  if(route==='/api/upload'&&req.method==='POST'){const name=url.searchParams.get('name')||'';if(path.basename(name)!==name||name.startsWith('.')||name.length>180||!/^\.(txt|json|xlsx|xls|csv|xml|ski|rpt|ini|log)$/i.test(path.extname(name)))throw deny('지원하지 않는 파일 / 不支援的檔案');const data=await body(req,8*1024*1024);const file=path.join(s.dir,'uploads',crypto.randomUUID()+'-'+name);await fs.writeFile(file,data,{flag:'wx'});json(res,{path:file});return;}
+  if(route==='/api/rpc'&&req.method==='POST'){const {method,args={}}=JSON.parse((await body(req)).toString());const methods=new Set(['gui.snapshot','gui.action','gui.image-step','dialog.reply','gui.models','gui.apply-model','gui.import-models','workflow.status','workflow.start','workflow.finish','workflow.recommend','workflow.apply','workflow.preferences','workflow.export']);if(!methods.has(method))throw deny('Unsupported remote method');if(method==='dialog.reply'){json(res,await this.reply(s,args));return;}json(res,await this.invoke(s,method,args));return;}
+  if(route==='/api/status'&&req.method==='GET'){json(res,{version:this.version,name:s.name,queue:s.queued,active:this.leases.has(s),concurrency:this.config.concurrency,error:s.client.failure?.message||null});return;}
+  throw deny('Not found');
+ }
+}
+module.exports={NetworkServer,within};

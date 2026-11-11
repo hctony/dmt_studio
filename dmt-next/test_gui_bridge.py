@@ -397,4 +397,19 @@ class GuiTests(unittest.TestCase):
             records=load_records_from_payload(payloads[0]);self.assertEqual(len(records),1)
             dest=self.root/'images';result=[];worker=DownloadThread(records,str(dest),'SM03');worker.finished.connect(result.append);worker.run();self.assertEqual(result,[3]);self.assertEqual(len(list(dest.rglob('*.png'))),3)
 
+    def test_remote_revalidates_inherited_paths_and_locks_busy_inputs(self):
+        tab=self.tab(6)
+        for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):
+            getattr(tab,field).clear()
+        tab.vrs_txt_in.setText(str(self.root.parent/'outside-approved-folder.txt'))
+        with patch.dict(os.environ,{'DMT_REMOTE_SESSION':'1','DMT_ALLOWED_ROOTS':json.dumps([str(self.root)])}):
+            self.c.handle({'id':801,'method':'gui.action','args':{'id':self.c.register(tab.btn_calc),'action':'click'}})
+            errors=[event for event in self.events if event.get('id')==801 and event.get('error')]
+            self.assertTrue(errors)
+            self.assertIn('허용',errors[0]['error'])
+            with patch.object(self.c,'busy',return_value=True):
+                self.c.handle({'id':802,'method':'gui.action','args':{'id':self.c.register(tab.units_per_strip_in),'action':'input','value':'999'}})
+            self.assertTrue(any(event.get('id')==802 and 'error' in event for event in self.events))
+            self.assertNotEqual(tab.units_per_strip_in.text(),'999')
+
 if __name__=='__main__':unittest.main()

@@ -37,7 +37,8 @@ function renderDialogs(){
  const host=$('modals');host.replaceChildren();
  (snapshot?.dialogs||[]).forEach(d=>host.append(modal(d.title,render(d.content),()=>action(d.id,'reject'))));
  if(dialogRequest){const d=dialogRequest;const body=el('div');body.append(el('p','',t(d.text)));let input;
-  const reply=async value=>{dialogRequest=null;renderDialogs();try{await window.studio.reply({id:d.id,value});}catch(e){error(e);}};
+  const reply=async value=>{dialogRequest=null;renderDialogs();try{await window.studio.reply({id:d.id,value});}catch(e){dialogRequest=d;renderDialogs();error(e);}};
+  if(['file','files','save','directory'].includes(d.kind)&&window.studio.showFileDialog){window.studio.showFileDialog(d,reply);return;}
   if(d.kind==='item'){input=el(d.editable?'input':'select');if(d.editable){input.value=d.items[d.current]||'';}else{d.items.forEach(v=>{const o=el('option','',v);o.value=v;input.append(o);});input.selectedIndex=d.current;}body.append(input);}
   const actions=el('div','modal-actions');
   if(d.kind==='message'){const names={Ok:tr('확인','確定'),Yes:tr('예','是'),No:tr('아니오','否'),Cancel:tr('취소','取消'),Close:tr('닫기','關閉'),Retry:tr('재시도','重試'),Abort:tr('중단','中止')};d.buttons.forEach(option=>{const b=el('button','',names[option.name]||option.name);b.onclick=()=>reply(option.value);actions.append(b);});}
