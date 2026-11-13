@@ -387,6 +387,7 @@ def load_latest_process_blocks(
     lot_id: str,
     bbt_map: dict[str, set[tuple[int, int]]] | None = None,
     ski_map: dict[str, set[tuple[int, int]]] | None = None,
+    selected_sources: dict[str, str] | None = None,
 ) -> tuple[dict[str, GatherStrip], int]:
     merged: dict[str, GatherStrip] = {}
     replaced_count = 0
@@ -397,10 +398,14 @@ def load_latest_process_blocks(
             target = merged.get(strip_id.upper())
             if target is None:
                 merged[strip_id.upper()] = candidate
+                if selected_sources is not None:
+                    selected_sources[strip_id.upper()] = str(txt_path)
             elif should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map):
                 candidate.sources = unique_lines(target.sources + candidate.sources)
                 candidate.replaced_count += target.replaced_count + 1
                 merged[strip_id.upper()] = candidate
+                if selected_sources is not None:
+                    selected_sources[strip_id.upper()] = str(txt_path)
                 replaced_count += 1
             else:
                 target.replaced_count += candidate.replaced_count + 1

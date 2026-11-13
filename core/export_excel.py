@@ -66,20 +66,8 @@ def export_report_to_2xlsx(
         lot_id      = report.get("lot_id", "")
 
         # ── 공통: 불량 코드 정렬 ─────────────────────────────────────────────
-        raw_defects: dict[str, int] = {
-            code: int(item.get("count", 0) or 0)
-            for code, item in report.get("final_defects_by_code_including_bbt", {}).items()
-        }
-        if "170" in raw_defects:
-            raw_defects["OT06"] = raw_defects.pop("170") + raw_defects.get("OT06", 0)
-        defects = {code: cnt for code, cnt in raw_defects.items() if cnt > 0}
-
-        PRIORITY_CODES = ["SM03_DUMMY9999", "UNKNOWN"]
-        priority_defects: list[tuple[str, int]] = [
-            (code, defects.pop(code)) for code in PRIORITY_CODES if code in defects
-        ]
-        normal_defects: list[tuple[str, int]] = sorted(defects.items())
-        ordered_defects: list[tuple[str, int]] = priority_defects + normal_defects
+        from core.report_codes import ordered_report_codes
+        ordered_defects = ordered_report_codes(report)
 
         DEFECT_START_COL = 10  # J 열 (1-based)
 

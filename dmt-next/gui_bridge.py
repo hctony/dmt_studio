@@ -163,7 +163,7 @@ class Controller(C.QObject):
         if isinstance(w,W.QTabWidget):
             return dict(d,type='tabs',index=w.currentIndex(),labels=[w.tabText(i) for i in range(w.count())],content=self.widget(w.currentWidget()))
         if isinstance(w,W.QLineEdit): return dict(d,type='input',value=w.text(),placeholder=w.placeholderText(),readonly=w.isReadOnly())
-        if isinstance(w,W.QComboBox): return dict(d,type='select',value=w.currentText(),index=w.currentIndex(),items=[w.itemText(i) for i in range(w.count())],editable=w.isEditable())
+        if isinstance(w,W.QComboBox): return dict(d,type='select',value=w.currentText(),index=w.currentIndex(),items=[w.itemText(i) for i in range(w.count())],editable=w.isEditable(),literal=bool(w.property('dmt_literal_text')))
         if isinstance(w,W.QDateEdit): return dict(d,type='date',value=w.date().toString('yyyy-MM-dd'))
         if isinstance(w,W.QAbstractButton): return dict(d,type='check' if isinstance(w,W.QCheckBox) else 'radio' if isinstance(w,W.QRadioButton) else 'button',text=w.text(),checked=w.isChecked())
         if isinstance(w,W.QLabel):
@@ -183,7 +183,7 @@ class Controller(C.QObject):
             return dict(d,type='label',text=w.text())
         if isinstance(w,W.QTextEdit):
             text=w.toPlainText()
-            return dict(d,type='text',text=text[-50000:] if w.isReadOnly() else text,readonly=w.isReadOnly(),truncated=w.isReadOnly() and len(text)>50000)
+            return dict(d,type='text',text=text[-50000:] if w.isReadOnly() else text,readonly=w.isReadOnly(),truncated=w.isReadOnly() and len(text)>50000,literal=bool(w.property('dmt_literal_text')))
         if isinstance(w,W.QProgressBar): return dict(d,type='progress',value=w.value(),max=w.maximum())
         if isinstance(w,W.QTableWidget):
             start=self.pages.get(key,0); start=min(start,max(0,((w.rowCount()-1)//200)*200)); rows=[]

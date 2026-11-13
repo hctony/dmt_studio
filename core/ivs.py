@@ -237,7 +237,7 @@ def load_ivs_dummy_scrap_strips(json_paths: list[Path], lot_id: str = "") -> set
     return scrap_strips
 
 
-def load_ivs_records_by_strip(json_paths: list[Path], lot_id: str = "") -> dict[str, list[DefectRecord]]:
+def load_ivs_records_by_strip(json_paths: list[Path], lot_id: str = "", source_paths=None) -> dict[str, list[DefectRecord]]:
     records_by_strip: dict[str, list[DefectRecord]] = defaultdict(list)
     lot_key = lot_id.strip().upper()
     for json_path in json_paths:
@@ -249,4 +249,6 @@ def load_ivs_records_by_strip(json_paths: list[Path], lot_id: str = "") -> dict[
             if lot_key and not strip_id.startswith(lot_key):
                 continue
             records_by_strip[strip_id].append(record)
+            if source_paths is not None:
+                source_paths[id(record)] = str(json_path)
     return records_by_strip

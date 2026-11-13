@@ -397,6 +397,34 @@ class GuiTests(unittest.TestCase):
             records=load_records_from_payload(payloads[0]);self.assertEqual(len(records),1)
             dest=self.root/'images';result=[];worker=DownloadThread(records,str(dest),'SM03');worker.finished.connect(result.append);worker.run();self.assertEqual(result,[3]);self.assertEqual(len(list(dest.rglob('*.png'))),3)
 
+    def test_code_preview_compares_original_xml_ski_and_selected_txt_in_gui(self):
+        from core.models import DefectRecord
+        from core.ivs import records_to_json
+        txt,ids=self.fixture();txt.write_text(txt.read_text().replace('SM03','1111'))
+        ski=self.root/'final.ski';ski.write_text('RX1234-01,1,1\nRX1234-01,2,1\n')
+        xml=self.root/'original.xml';xml.write_text('<Root barcode="RX1234-01"><Unit><P0 unit_idx="0" ivs_1="1111"/></Unit></Root>')
+        record=DefectRecord('RX1234-01','A','M','RX1234-','T','1','Unit','T','0','0','1111','1111','','F',1,1,0,0,str(xml),[])
+        ivs=self.root/'ivs.json';ivs.write_text(json.dumps(records_to_json('M','RX1234-',[record])))
+        tab=self.tab(6)
+        for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):getattr(tab,field).clear()
+        tab.vrs_txt_in.setText(str(txt));tab.strip_json_in.setText(str(ids));tab.ivs_json_in.setText(str(ivs));tab.ski_in.setText(str(ski));tab.units_per_strip_in.setText('4');tab.xout_limit_in.setText('3')
+        self.action(tab.btn_calc,'click');self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
+        try:
+            self.assertEqual(dict(dialog.codes),{'UNKNOWN':1,'1111':1})
+            index=next(i for i,item in enumerate(dialog.codes) if item[0]=='1111')
+            self.action(dialog.code_table,'table',row=index,column=0)
+            end=time.monotonic()+3
+            while 'ivs_1="1111"' not in dialog.xml_view.toPlainText() and time.monotonic()<end:self.app.processEvents();time.sleep(.01)
+            self.assertIn('ivs_1="1111"',dialog.xml_view.toPlainText());self.assertIn('▶ L1:',dialog.ski_view.toPlainText());self.assertIn('1111',dialog.txt_view.toPlainText())
+            self.assertIn(str(txt),dialog.proof.toPlainText());self.assertTrue(self.c.snapshot()['dialogs'])
+            current=dialog.xml_view.toPlainText();dialog.apply_source(dialog._generation-1,{'xml':'stale'});self.assertEqual(dialog.xml_view.toPlainText(),current)
+        finally:
+            dialog.reject()
+            for worker in list(getattr(dialog,'_live_workers',())):worker.stop();worker.wait(2000)
+            self.app.processEvents()
+        tab.units_per_strip_in.setText('8');self.action(tab.btn_code_preview,'click')
+        self.assertTrue(any('입력이 변경' in data.get('text','') for kind,data in self.dialogs if kind=='message'))
+
     def test_remote_preview_is_bounded_but_original_image_and_full_logs_stay_in_backend(self):
         from PySide6.QtGui import QPixmap,QImage
         import base64

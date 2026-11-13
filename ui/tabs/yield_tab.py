@@ -223,6 +223,9 @@ class YieldTab(QWidget):
         self.btn_export_excel = QPushButton(_("성적서 엑셀 내보내기"))
         self.btn_export_excel.clicked.connect(self.export_excel)
         action_row.addWidget(self.btn_export_excel)
+        self.btn_code_preview = QPushButton(_("코드 미리보기"))
+        self.btn_code_preview.clicked.connect(self.preview_report_codes)
+        action_row.addWidget(self.btn_code_preview)
         self.btn_report_template = QPushButton(_("성적서 템플릿 변경"))
         self.btn_report_template.clicked.connect(self.choose_report_template)
         action_row.addWidget(self.btn_report_template)
@@ -467,7 +470,28 @@ class YieldTab(QWidget):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, _("계산 실패"), str(exc))
             return
+        self._report_input_snapshot = self.report_input_values()
         self.refresh_result()
+
+    def report_input_values(self):
+        names=('model_in','vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in',
+               'skipdata_in','ski_in','units_per_strip_in','xout_limit_in')
+        return tuple(getattr(self,name).text().strip() for name in names)+tuple(self.get_process_filters() or [])
+
+    def report_ready(self):
+        if not self.summary:
+            QMessageBox.warning(self,_("저장 없음"),_("먼저 수율 계산을 실행하세요."));return False
+        saved=getattr(self,'_report_input_snapshot',None)
+        if saved is not None and saved!=self.report_input_values():
+            QMessageBox.warning(self,_("입력 변경"),_("입력이 변경되었습니다. 수율을 다시 계산한 뒤 미리보기·성적서를 생성하세요."));return False
+        return True
+
+    def preview_report_codes(self):
+        if not self.report_ready():return
+        from core.yield_calc import build_yield_report_aggregation
+        from ui.report_preview import ReportPreviewDialog
+        self.report_preview_dialog=ReportPreviewDialog(self.summary,build_yield_report_aggregation(self.summary,self.model_in.text().strip()),self)
+        self.report_preview_dialog.show()
 
     def validate_strip_json(self) -> None:
         json_path = Path(self.strip_json_in.text().strip())
@@ -645,6 +669,8 @@ class YieldTab(QWidget):
             QMessageBox.critical(self, _("템플릿 오류"), str(exc))
 
     def export_excel(self) -> None:
+        if not self.report_ready():
+            return
         if not self.summary:
             QMessageBox.warning(self, _("저장 없음"), _("먼저 수율 계산을 실행하세요."))
             return

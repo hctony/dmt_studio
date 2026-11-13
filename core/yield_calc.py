@@ -778,22 +778,30 @@ def calculate_yield_summary_by_process(
 ) -> dict:
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     ivs_dummy_scrap_strips = ivs_dummy_scrap_strips or set()
-    bbt_map = load_skipdata_folder(skipdata_path)
+    bbt_sources = {}
+    bbt_map = load_skipdata_folder(skipdata_path, bbt_sources)
     bbt_code_map = load_skipdata_code_folder(skipdata_path)
     ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
-    ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id)
+    ivs_origins = {}
+    ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins)
     process_priority = ["IVS", "VRS", "FVI"]
     process_inputs = {
         "VRS": vrs_paths,
         "FVI": fvi_paths,
         "IVS": ivs_paths or [],
     }
+    from core.report_trace import ReportTrace
+    report_trace = ReportTrace(process_inputs, ivs_json_paths or [], skipdata_path, ski_path)
+    report_trace.set_bbt_sources(bbt_sources)
     process_blocks: dict[str, dict[str, GatherStrip]] = {}
     process_replaced: dict[str, int] = {}
+    process_selected_sources = {}
     for process, paths in process_inputs.items():
         if filters and process not in filters:
             continue
-        blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map) if paths else ({}, 0)
+        selected = {}
+        blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected) if paths else ({}, 0)
+        process_selected_sources[process] = selected
         process_blocks[process] = blocks
         process_replaced[process] = replaced
     gather_strip_ids = set().union(*(set(blocks) for blocks in process_blocks.values()))
@@ -838,8 +846,6 @@ def calculate_yield_summary_by_process(
     ivs_170_code_adjustments: list[dict] = []
     full_unit_without_xout_over_limit_rows: list[dict] = []
     xout_consistency_rows: list[dict] = []
-    report_code_to_coords: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
-    report_process_code_to_coords: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
     report_ski_total_units = 0
 
     for strip_id in sorted(expected_strip_ids):
@@ -945,18 +951,26 @@ def calculate_yield_summary_by_process(
         if len(report_target_coords) > units_per_strip:
             report_target_coords = set(sorted(report_target_coords, key=lambda item: (item[1], item[0]))[:units_per_strip])
         report_ski_total_units += len(report_target_coords)
+        if report_target_coords:
+            refs = sorted({(r.unit_idx,r.ivs_1,r.container,r.face,r.source_xml,ivs_origins.get(id(r),''),r.code_main,r.code_sub)
+                           for r in ivs_records_by_strip.get(strip_id,[])})
+            report_trace.strips[strip_id] = {'x_count':x_count_for_strip,'units_per_strip':units_per_strip,'is_scrap':is_scrap,
+                'ski_coords':[list(c) for c in sorted(ski_coords_for_strip)],'bbt_coords':[list(c) for c in sorted(bbt_coords)],
+                'processes':{p:{**summarize_gather_block_by_process(p,blocks.get(strip_id)),
+                               'selected_source':process_selected_sources.get(p,{}).get(strip_id,'')}
+                             for p,blocks in process_blocks.items()},
+                'ivs_records':[list(ref) for ref in refs]}
         report_remaining = set(report_target_coords)
         for coord in sorted(bbt_coords & report_remaining, key=lambda item: (item[1], item[0])):
             x, y = coord
-            report_code_to_coords["OT14"].add((strip_id, x, y))
-            report_process_code_to_coords["BBT:OT14"].add((strip_id, x, y))
+            report_trace.add(strip_id,'OT14','BBT',(x,y),'bbt')
         report_remaining -= bbt_coords
         if is_ivs_dummy_scrap:
             for coord in sorted(report_remaining, key=lambda item: (item[1], item[0])):
                 x, y = coord
-                report_code_to_coords["SM03_DUMMY9999"].add((strip_id, x, y))
-                report_process_code_to_coords["IVS:SM03_DUMMY9999"].add((strip_id, x, y))
+                report_trace.add(strip_id,'SM03_DUMMY9999','IVS',(x,y),'dummy9999')
             report_remaining.clear()
+        recovered_ivs_coords = set()
         if is_scrap and not is_ivs_dummy_scrap:
             non170_assigned = set().union(
                 *(
@@ -990,6 +1004,10 @@ def calculate_yield_summary_by_process(
                     if not removed_from:
                         continue
                     assigned_by_process["IVS"][record.ivs_1].add(coord)
+                    recovered_ivs_coords.add((record.ivs_1,coord))
+                    report_trace.strips[strip_id].setdefault('recovered_ivs',{})[f'{coord[0]},{coord[1]}'] = [
+                        record.unit_idx,record.ivs_1,record.container,record.face,record.source_xml,
+                        ivs_origins.get(id(record),''),record.code_main,record.code_sub]
                     ivs_170_code_adjustments.append(
                         {
                             "strip_id": strip_id,
@@ -1010,8 +1028,11 @@ def calculate_yield_summary_by_process(
                     process_unique_added_coords[process].add((strip_id, x, y))
                     process_code_to_coords[f"{process}:{code}"].add((strip_id, x, y))
                     if (x, y) in report_remaining:
-                        report_code_to_coords[code].add((strip_id, x, y))
-                        report_process_code_to_coords[f"{process}:{code}"].add((strip_id, x, y))
+                        reason = 'ivs_recovery' if process == 'IVS' and (code,(x,y)) in recovered_ivs_coords else 'gather'
+                        if code == 'UNKNOWN' and any(parse_xy_from_gather_line(line)==(x,y) and not line.split(',')[-1].strip()
+                            for line in process_blocks.get(process,{}).get(strip_id,GatherStrip('',strip_id)).defect_lines):
+                            reason = 'missing_code'
+                        report_trace.add(strip_id,code,process,(x,y),reason)
                         report_remaining.discard((x, y))
                 counted_non170_added_coords.update(coords)
         added_units += len(counted_non170_added_coords)
@@ -1038,8 +1059,7 @@ def calculate_yield_summary_by_process(
             fallback_code = "170" if is_scrap else "UNKNOWN"
             fallback_process = "XOUT" if is_scrap else "UNASSIGNED"
             for x, y in sorted(report_remaining, key=lambda item: (item[1], item[0])):
-                report_code_to_coords[fallback_code].add((strip_id, x, y))
-                report_process_code_to_coords[f"{fallback_process}:{fallback_code}"].add((strip_id, x, y))
+                report_trace.add(strip_id,fallback_code,fallback_process,(x,y),'xout_fill' if is_scrap else 'ski_unassigned')
         if not is_scrap:
             good_strips += 1
             good_strip_defective_units += ski_defects
@@ -1113,8 +1133,7 @@ def calculate_yield_summary_by_process(
     }
     code_distribution = {code: len(coords) for code, coords in sorted(code_to_coords.items())}
     process_code_distribution = {code: len(coords) for code, coords in sorted(process_code_to_coords.items())}
-    report_code_distribution = {code: len(coords) for code, coords in sorted(report_code_to_coords.items())}
-    report_process_code_distribution = {code: len(coords) for code, coords in sorted(report_process_code_to_coords.items())}
+    report_code_distribution, report_process_code_distribution = report_trace.distributions()
     report_process_defect_distribution = merge_process_code_distribution(report_process_code_distribution)
     process_unique_added_distribution = {
         process: len(coords)
@@ -1186,6 +1205,7 @@ def calculate_yield_summary_by_process(
         "code_distribution": code_distribution,
         "process_code_distribution": process_code_distribution,
         "report_code_distribution": report_code_distribution,
+        "report_trace": report_trace.snapshot(),
         "report_process_code_distribution": report_process_code_distribution,
         "report_process_defect_distribution": report_process_defect_distribution,
         "ski_defect_units_for_report": report_ski_total_units,

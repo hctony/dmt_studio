@@ -19,6 +19,7 @@ RPT_CODE_RE = re.compile(r"-\s*([A-Za-z0-9_]+)\s*$")
 # Module-level caches
 # ---------------------------------------------------------------------------
 SKIPDATA_CACHE: dict[tuple, dict[str, set[tuple[int, int]]]] = {}
+SKIPDATA_SOURCE_CACHE: dict[tuple, dict[str, list[str]]] = {}
 SKIPDATA_CODE_CACHE: dict[tuple, dict[str, dict[str, set[tuple[int, int]]]]] = {}
 SKI_FILE_CACHE: dict[tuple[str, float, int], dict[str, set[tuple[int, int]]]] = {}
 
@@ -28,7 +29,7 @@ def rpt_fingerprint(path: Path, files: list[Path]) -> tuple:
     return (str(path), tuple(sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files)))
 
 
-def load_skipdata_folder(path: Path | None) -> dict[str, set[tuple[int, int]]]:
+def load_skipdata_folder(path: Path | None, source_paths=None) -> dict[str, set[tuple[int, int]]]:
     if path is None or not str(path).strip():
         return {}
     if not path.is_dir():
@@ -36,10 +37,13 @@ def load_skipdata_folder(path: Path | None) -> dict[str, set[tuple[int, int]]]:
     rpt_files = list(path.glob("*.rpt"))
     cache_key = rpt_fingerprint(path, rpt_files)
     cached = SKIPDATA_CACHE.get(cache_key)
-    if cached is not None:
+    if cached is not None and cache_key in SKIPDATA_SOURCE_CACHE:
+        if source_paths is not None:
+            source_paths.update(SKIPDATA_SOURCE_CACHE[cache_key])
         return cached
 
     result: dict[str, set[tuple[int, int]]] = defaultdict(set)
+    sources = defaultdict(set)
     for rpt_file in rpt_files:
         current_strip = rpt_file.stem.strip().upper()
         for raw in read_text_lines(rpt_file):
@@ -53,9 +57,13 @@ def load_skipdata_folder(path: Path | None) -> dict[str, set[tuple[int, int]]]:
             xy_match = RPT_XY_RE.search(line)
             if current_strip and xy_match:
                 result[current_strip].add((int(xy_match.group(1)), int(xy_match.group(2))))
+                sources[current_strip].add(str(rpt_file))
 
     normalized = {strip_id: coords for strip_id, coords in result.items() if coords}
     SKIPDATA_CACHE[cache_key] = normalized
+    SKIPDATA_SOURCE_CACHE[cache_key] = {strip: sorted(paths) for strip, paths in sources.items()}
+    if source_paths is not None:
+        source_paths.update(SKIPDATA_SOURCE_CACHE[cache_key])
     return normalized
 
 
