@@ -4,6 +4,7 @@ from core.i18n import _
 
 import traceback
 import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -56,10 +57,16 @@ class IvsScanThread(QThread):
 
     def run(self) -> None:
         ssh = sftp = None
+        started=time.monotonic()
         try:
             check_cancelled(self._cancel.is_set)
             ssh, sftp = connect()
+            connection_seconds=time.monotonic()-started
             self._ssh = ssh
+            if getattr(sftp,'_dmt_scan_session',False) is True:
+                sftp.should_stop=self._cancel.is_set
+                sftp.bypass_xml_cache=getattr(self,'bypass_xml_cache',False)
+                sftp._dmt_lazy_images=True
             check_cancelled(self._cancel.is_set)
             if self.trial_path.strip():
                 trials = [parse_trial_context(self.trial_path)]
@@ -134,6 +141,11 @@ class IvsScanThread(QThread):
                                             'trial' if self.trial_path.strip() else 'lot', parse_errors)
             population['xml_count'] = parsed_xml_count
             payload = records_to_json(model, lot, records, population)
+            if getattr(sftp,'_dmt_scan_session',False) is True:
+                payload['scan_metrics']=sftp.report()
+                payload['scan_metrics'].update(elapsed_seconds=round(time.monotonic()-started,4),connection_seconds=round(connection_seconds,4))
+                metrics=payload['scan_metrics']
+                self.progress.emit(_('[IVS 성능]')+f" {metrics['elapsed_seconds']:.2f}s · "+_('XML 원격 읽기')+f": {metrics['xml_reads']} · "+_('XML 캐시 재사용')+f": {metrics['xml_cache_hits']} · "+_('폴더 조회')+f": {metrics['directory_reads']}")
             check_cancelled(self._cancel.is_set)
             self.finished.emit(payload)
         except OperationCancelled:
@@ -223,6 +235,7 @@ class ImageLoaderThread(QThread):
             images: list[bytes] = []
             for path in self.paths[:3]:
                 try:
+                    if getattr(sftp,'_dmt_scan_session',False) is True:path=sftp.resolve_image(path)
                     with sftp.open(path, "rb") as fh:
                         images.append(fh.read())
                 except Exception:
@@ -295,6 +308,7 @@ class DownloadThread(QThread):
                     used_names.add(file_name)
                     out_file = out_dir / file_name
                     try:
+                        if getattr(sftp,'_dmt_scan_session',False) is True:remote_path=sftp.resolve_image(remote_path)
                         with sftp.open(remote_path, "rb") as remote_fh:
                             data = remote_fh.read()
                         label = (

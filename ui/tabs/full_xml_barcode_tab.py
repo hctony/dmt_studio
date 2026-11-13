@@ -9,6 +9,7 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -71,6 +72,8 @@ class FullXmlBarcodeTab(QWidget):
         form.addRow("LOT", lot_row)
         form.addRow(_("Trial 선택"), trial_select_row)
         form.addRow(_("특정 Trial 경로"), self.trial_path_in)
+        self.force_xml=QCheckBox(_('XML 강제 다시 읽기 (캐시 무시)'))
+        form.addRow(self.force_xml)
         layout.addWidget(form_box)
 
         row = QHBoxLayout()
@@ -129,6 +132,7 @@ class FullXmlBarcodeTab(QWidget):
         self.result.clear()
         self.payload = None
         self.thread = FullXmlBarcodeScanThread(model, lot, trial_path)
+        self.thread.bypass_xml_cache=self.force_xml.isChecked()
         self.thread.progress.connect(self.result.append)
         self.thread.finished.connect(self.on_finished)
         self.thread.failed.connect(self.on_failed)

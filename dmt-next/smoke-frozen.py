@@ -42,19 +42,23 @@ with tempfile.TemporaryDirectory() as data:
     ski=fixture/'final.ski';ski.write_text('TEST-01,1,1\nTEST-01,2,1\n')
     xml=fixture/'original.xml';xml.write_text('<Root barcode="TEST-01"><Unit><P0 unit_idx="0" ivs_1="1111"/></Unit></Root>')
     ivs=fixture/'ivs.json';ivs.write_text(json.dumps({'schema':'dmt-studio-ivs-v1','lot_id':'TEST-','model':'M','records':[{'strip_id':'TEST-01','machine':'A','model':'M','lot':'TEST-','trial':'T','strip_folder':'1','container':'Unit','face':'T','unit_idx':'0','img_merge_idx':'0','ivs_1':'1111','code_main':'1111','code_sub':'','def_side':'F','strip_pt_x':1,'strip_pt_y':1,'img_pt_x':0,'img_pt_y':0,'source_xml':str(xml),'images':[]}]}))
+    sample_payload=json.loads(ivs.read_text());sample_payload['records']=[{**sample_payload['records'][0],'unit_idx':str(i)} for i in range(31)];ivs.write_text(json.dumps(sample_payload))
     process=subprocess.Popen([str(backend),'--gui'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf8',env=dict(os.environ,DMT_DATA_DIR=data,QT_QPA_PLATFORM='offscreen'),cwd=data)
     output=queue.Queue()
     def read_output():
         for line in process.stdout:output.put(line)
     threading.Thread(target=read_output,daemon=True).start()
     sequence=0
-    def rpc(method,**args):
+    def rpc(method,on_dialog=None,**args):
         global sequence
         sequence+=1;request_id=sequence
         process.stdin.write(json.dumps({'id':request_id,'method':method,'args':args})+'\n');process.stdin.flush()
         deadline=time.monotonic()+30
         while time.monotonic()<deadline:
             message=json.loads(output.get(timeout=max(.1,deadline-time.monotonic())))
+            if message.get('event')=='dialog' and on_dialog:
+                sequence+=1
+                process.stdin.write(json.dumps({'id':sequence,'method':'dialog.reply','args':{'id':message['dialog']['id'],'value':on_dialog(message['dialog'])}})+'\n');process.stdin.flush()
             if message.get('id')==request_id:
                 assert not message.get('error'),message
                 return message['result']
@@ -87,6 +91,16 @@ with tempfile.TemporaryDirectory() as data:
             if not rpc('gui.snapshot')['busy']:break
             time.sleep(.05)
         print('Packaged backend: report code counts, TXT/SKI/XML evidence and source worker OK')
+        rpc('gui.action',id=state['root']['id'],action='tab',value=0)
+        state=rpc('gui.snapshot');button=next(w for w in walk(state['root']) if w['type']=='button' and w['text']=='JSON 열기')
+        rpc('gui.action',on_dialog=lambda d:str(ivs),id=button['id'],action='click')
+        state=rpc('gui.snapshot');assert any(w['type']=='list' and w['total']==10 for w in walk(state['root']))
+        button=next(w for w in walk(state['root']) if w['type']=='button' and w['text']=='추가로 보기')
+        rpc('gui.action',id=button['id'],action='click');state=rpc('gui.snapshot');dialog=state['dialogs'][0]
+        assert dialog['title']=='이미지 추가 보기 범위'
+        assert any(w['type']=='label' and w['text']=='31' for w in walk(dialog['content']))
+        rpc('gui.action',id=dialog['id'],action='reject')
+        print('Packaged backend: full image count, ten representatives and range dialog OK')
     finally:
         process.stdin.close()
         try:process.wait(timeout=10)

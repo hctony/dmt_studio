@@ -22,3 +22,4 @@ aside{overflow-y:auto}nav,footer{flex-shrink:0}
 .report-code-sources .group{padding:12px;margin:0;min-width:0}.report-code-sources h2{margin-bottom:12px}
 .report-code-sources .text{height:310px;min-height:200px;white-space:pre;tab-size:2}
 @media(max-width:1000px){.report-code-preview .report-code-tables,.report-code-preview .report-code-sources{grid-template-columns:minmax(0,1fr)}}
+.modal:has(.image-range-dialog){width:min(640px,95vw)}

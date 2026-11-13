@@ -169,6 +169,34 @@ class GuiTests(unittest.TestCase):
                 self.c.handle({'id':71,'method':'gui.image-step','args':{'direction':direction}})
                 self.assertEqual(tab.defect_list.currentRow(),expected)
             self.assertEqual(json.loads(tab.info.toPlainText())['image_record_count'],2)
+
+    def test_image_samples_more_dialog_and_download_range_keep_full_summary(self):
+        from core.models import DefectRecord
+        from core.ivs import build_summary
+        from dataclasses import replace
+        tab=self.tab(0)
+        base=DefectRecord('S','A','M','L','T','1','Unit','FC','0','0','SM03','SM03','','F',1,1,0,0,'xml',[])
+        tab.records=[replace(base,unit_idx=str(i)) for i in range(35)]
+        before=build_summary(tab.records);tab.refresh_view()
+        self.assertEqual(tab.defect_list.count(),10);self.assertEqual(tab.summary_table.item(0,1).text(),'35')
+        self.action(tab.btn_more_images,'click');dlg=tab.image_range_dialog
+        self.assertEqual(dlg.total.text(),'35');self.assertEqual(dlg.start.text(),'11')
+        self.action(dlg.start,'input','11');self.action(dlg.end,'input','20')
+        button=next(b for b in dlg.findChildren(W.QPushButton) if b.text()=='추가로 보기');self.action(button,'click')
+        self.assertEqual(tab.defect_list.count(),20);self.assertEqual(build_summary(tab.records),before)
+        captured=[]
+        class Download(C.QObject):
+            progress=C.Signal(str);finished=C.Signal(int);failed=C.Signal(str)
+            def __init__(self,records,folder,code):super().__init__();captured.append((records,folder,code))
+            def start(self):pass
+            def isRunning(self):return False
+        self.answers['directory']=str(self.root)
+        with patch('ui.tabs.ivs_tab.DownloadThread',Download):
+            self.action(tab.btn_download,'click');dlg=tab.download_range_dialog
+            self.action(dlg.start,'input','26');self.action(dlg.end,'input','30')
+            button=next(b for b in dlg.findChildren(W.QPushButton) if b.text()=='다운로드');self.action(button,'click')
+        self.assertEqual([r.unit_idx for r in captured[0][0]],['25','26','27','28','29'])
+        self.assertEqual(captured[0][2],'SM03');self.assertEqual(build_summary(tab.records),before)
     def test_gathering_lot_input_auto_and_lookup_all_resolve_legacy_paths(self):
         from ui.common_widgets import finish_line_edit_lot_lookup
         tab=self.tab(3)

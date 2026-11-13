@@ -909,6 +909,8 @@ def calculate_yield_summary_by_process(
             and process_coord_counts
         ):
             effective_final_xout = len(ski_coords_for_strip)
+        if ski_coords_for_strip:
+            effective_final_xout = max(effective_final_xout, len(ski_coords_for_strip | bbt_coords))
         is_ski_full_scrap_by_limit = bool(ski_map and ski_defects >= units_per_strip and effective_final_xout > xout_limit)
         is_scrap = effective_final_xout >= units_per_strip or is_ski_full_scrap_by_limit
         unique_bbt_plus_added_count = len(bbt_coords | assigned_added_coords)
@@ -942,6 +944,8 @@ def calculate_yield_summary_by_process(
                 }
             )
         strip_defects = units_per_strip if is_scrap else ski_defects
+        if ski_map and not is_scrap:
+            strip_defects = min(units_per_strip, ski_defects + len(bbt_coords - ski_coords_for_strip))
         defective_units += strip_defects
         bbt_units += len(bbt_coords)
         xout_distribution[effective_final_xout] += 1
@@ -951,6 +955,9 @@ def calculate_yield_summary_by_process(
         if len(report_target_coords) > units_per_strip:
             report_target_coords = set(sorted(report_target_coords, key=lambda item: (item[1], item[0]))[:units_per_strip])
         report_ski_total_units += len(report_target_coords)
+        # Previous-process RPT defects belong to the selected Strip regardless
+        # of final SKI membership; do not silently drop them or count twice.
+        report_target_coords.update(bbt_coords)
         if report_target_coords:
             refs = sorted({(r.unit_idx,r.ivs_1,r.container,r.face,r.source_xml,ivs_origins.get(id(r),''),r.code_main,r.code_sub)
                            for r in ivs_records_by_strip.get(strip_id,[])})

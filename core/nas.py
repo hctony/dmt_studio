@@ -28,7 +28,8 @@ def connect() -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
         ssh.get_transport().set_keepalive(15)
         sftp = ssh.open_sftp()
         sftp.get_channel().settimeout(30)
-        return ssh, sftp
+        from core.nas_cache import ScanSftp
+        return ssh, ScanSftp(sftp)
     except Exception:
         ssh.close()
         raise
@@ -138,6 +139,8 @@ def image_candidates(base_without_ext: str) -> list[str]:
 
 
 def resolve_three_images(sftp: paramiko.SFTPClient, base_without_ext: str, should_stop=None) -> list[str]:
+    if getattr(sftp, '_dmt_scan_session', False) is True:
+        return [sftp.resolve_image(base_without_ext+suffix+'.bmp') for suffix in ('_Sub2','','_Sub1')]
     resolved: list[str] = []
     for suffix in ("_Sub2", "", "_Sub1"):
         found = ""
@@ -156,6 +159,11 @@ def resolve_three_images(sftp: paramiko.SFTPClient, base_without_ext: str, shoul
 # ---------------------------------------------------------------------------
 
 def decode_xml(data: bytes) -> ET.Element:
+    # Let XML declarations/BOMs select UTF-8/UTF-16 before legacy encodings.
+    try:
+        return ET.fromstring(data)
+    except Exception:
+        pass
     last_err: Exception | None = None
     for enc in ("cp949", "euc-kr", "utf-8", "utf-8-sig", "utf-16"):
         try:
@@ -165,10 +173,18 @@ def decode_xml(data: bytes) -> ET.Element:
     raise last_err or ValueError("XML decode failed")
 
 
+def read_xml_root(xml_path, sftp):
+    import time
+    if getattr(sftp, '_dmt_scan_session', False) is True:
+        data=sftp.read_xml(xml_path);started=time.monotonic()
+        try:return decode_xml(data)
+        finally:sftp.metrics['xml_parse_seconds']+=time.monotonic()-started
+    with sftp.open(xml_path,'rb') as file:return decode_xml(file.read())
+
+
 def read_barcode_from_xml(xml_path: str, sftp: paramiko.SFTPClient) -> Optional[str]:
     try:
-        with sftp.open(xml_path, "rb") as fh:
-            root = decode_xml(fh.read())
+        root = read_xml_root(xml_path,sftp)
     except Exception:
         return None
     for elem in root.iter():

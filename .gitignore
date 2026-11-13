@@ -19,3 +19,4 @@ yield_model_settings.json
 **/network-server.json
 **/measurements.jsonl*
 **/diagnostics/
+**/nas-xml.sqlite*

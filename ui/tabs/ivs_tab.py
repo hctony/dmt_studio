@@ -11,7 +11,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, QByteArray
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from config import DEFAULT_MODEL
 from core.models import DefectRecord
+from core.image_catalog import ImageCatalog
 from core.ivs import build_summary, records_to_json, load_records_from_payload
 from core.utils import infer_lot_id_from_values
 from ui.settings_helper import restore_line_edit, save_line_edit
@@ -34,6 +35,7 @@ class IvsStudioTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.records: list[DefectRecord] = []
+        self.image_catalog=ImageCatalog([])
         self.filtered_records: list[DefectRecord] = []
         self.scan_thread: Optional[IvsScanThread] = None
         self.trial_list_thread: Optional[TrialListThread] = None
@@ -81,6 +83,8 @@ class IvsStudioTab(QWidget):
         self.model_in.editingFinished.connect(self.restore_ivs_units)
         self.units_per_strip_in.editingFinished.connect(self.update_ivs_rates)
         form.addRow(_("스트립당 Unit 수"), self.units_per_strip_in)
+        self.force_xml=QCheckBox(_('XML 강제 다시 읽기 (캐시 무시)'))
+        form.addRow(self.force_xml)
         root.addWidget(config_box)
 
         buttons = QHBoxLayout()
@@ -141,6 +145,9 @@ class IvsStudioTab(QWidget):
         self.filter_combo.currentTextChanged.connect(self.apply_filter)
         filter_row.addWidget(self.filter_combo)
         left_lay.addLayout(filter_row)
+        self.image_count_label=QLabel();self.image_count_label.setWordWrap(True);left_lay.addWidget(self.image_count_label)
+        self.btn_more_images=QPushButton(_('추가로 보기'));self.btn_more_images.setEnabled(False);self.btn_more_images.clicked.connect(self.more_images)
+        left_lay.addWidget(self.btn_more_images)
         self.defect_list = QListWidget()
         self.defect_list.itemSelectionChanged.connect(self.on_record_selected)
         left_lay.addWidget(self.defect_list)
@@ -206,6 +213,7 @@ class IvsStudioTab(QWidget):
             QMessageBox.warning(self, _("입력 오류"), _("스트립당 Unit 수는 양의 정수로 입력하세요."))
             return
         self.scan_thread = IvsScanThread(model, lot, trial_path, units)
+        self.scan_thread.bypass_xml_cache=self.force_xml.isChecked()
         self.scan_thread.progress.connect(self.log)
         self.scan_thread.finished.connect(self.on_scan_finished)
         self.scan_thread.failed.connect(self.on_scan_failed)
@@ -356,6 +364,8 @@ class IvsStudioTab(QWidget):
             return
         try:
             payload = records_to_json(model, lot, self.records, (getattr(self, 'current_payload', None) or {}).get('population'))
+            if (getattr(self,'current_payload',None) or {}).get('scan_metrics'):
+                payload['scan_metrics']=self.current_payload['scan_metrics']
             Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             self.log(f"JSON 저장 완료: {path}")
             QMessageBox.information(self, _("저장 완료"), f"정상적으로 저장되었습니다:\n{path}")
@@ -395,6 +405,7 @@ class IvsStudioTab(QWidget):
         self.refresh_view()
 
     def refresh_view(self) -> None:
+        self.image_catalog=ImageCatalog(self.records)
         population = (getattr(self, 'current_payload', None) or {}).get('population', {})
         total_units = population.get('total_units')
         # A numerator outside the verified population indicates inconsistent data.
@@ -451,6 +462,8 @@ class IvsStudioTab(QWidget):
         self.download_group_list.blockSignals(False)
 
     def apply_filter(self, text: str) -> None:
+        if getattr(self,'_catalog_is_search',False):
+            self.image_catalog=ImageCatalog(self.records);self._catalog_is_search=False
         if text == _("불량만(9998/Dummy 제외)"):
             self.filtered_records = [r for r in self.records if r.is_rate_defect]
         elif text == "Rework 9998":
@@ -464,14 +477,14 @@ class IvsStudioTab(QWidget):
             self.filtered_records = [r for r in self.records if r.ivs_1 == code]
         else:
             self.filtered_records = list(self.records)
-        from posixpath import normpath
-        grouped = {}
-        for index, record in enumerate(self.filtered_records):
-            paths = tuple(sorted({normpath(p.strip().replace("\\", "/")) for p in record.images if p.strip()}))
-            key = ('images', paths) if paths else ('record', index)
-            grouped.setdefault(key, []).append(record)
-        self.image_record_groups = list(grouped.values())
+        self.show_image_selection(self.filtered_records)
+
+    def show_image_selection(self,records):
+        self._image_filter_records=list(records)
+        self.image_record_groups = self.image_catalog.visible(records)
         self.filtered_records = [group[0] for group in self.image_record_groups]
+        self.image_count_label.setText(_('기본 코드별 최대 10건')+f" · "+_('표시')+f": {len(self.image_record_groups)} / "+_('전체 이미지 세트')+f": {sum(self.image_catalog.counts().values())}\n"+_('이미지 파일 후보 (경로 기준)')+f": {self.image_catalog.candidate_files()} · "+_('실제 파일 존재 여부는 조회 시 확인'))
+        self.btn_more_images.setEnabled(bool(self.image_catalog.counts()))
         self.defect_list.clear()
         for record in self.filtered_records:
             self.defect_list.addItem(QListWidgetItem(
@@ -525,13 +538,9 @@ class IvsStudioTab(QWidget):
         return any(token in haystack for token in filters)
 
     def show_search_records(self, records: list[DefectRecord], message: str) -> None:
-        self.filtered_records = records
-        self.defect_list.clear()
-        for record in self.filtered_records:
-            self.defect_list.addItem(QListWidgetItem(
-                f"[{record.ivs_1}] {record.strip_id} {record.container} U{record.unit_idx} "
-                f"{record.face} p{record.img_merge_idx} ({record.machine}/{record.trial}/{record.strip_folder})"
-            ))
+        self.image_catalog=ImageCatalog(records)
+        self._catalog_is_search=True
+        self.show_image_selection(records)
         self.log(message)
         self.btn_download.setEnabled(bool(self.selected_download_group_codes()) and bool(self.records))
         if self.filtered_records:
@@ -568,8 +577,24 @@ class IvsStudioTab(QWidget):
         return [record for record in self.records if record.is_rate_defect and record.ivs_1 in selected_codes]
 
     def download_group_code_options(self) -> list[str]:
-        rows = build_summary(self.records).get("by_defect_type", [])
-        return [str(item["ivs_1"]) for item in rows if str(item.get("ivs_1", "")) not in {"", "0", "9998"}]
+        return [code for code in self.image_catalog.counts() if code not in ('','0')]
+
+    def more_images(self):
+        from ui.image_range import ImageRangeDialog
+        counts=self.image_catalog.counts()
+        if not counts:return
+        current=self.filter_combo.currentText().split(' ',1)[-1]
+        self.image_range_dialog=ImageRangeDialog(counts,current=current,parent=self)
+        self.image_range_dialog.submitted.connect(self.add_image_range)
+        self.image_range_dialog.show()
+
+    def add_image_range(self,code,start,end):
+        self.image_catalog.add_view_range(code,start,end)
+        self.filter_combo.blockSignals(True);self.filter_combo.setCurrentText(f'불량 {code}');self.filter_combo.blockSignals(False)
+        # NAS Strip searches may contain records outside the current LOT payload.
+        records=[r for groups in self.image_catalog.by_code.get(code,[]) for r in groups]
+        self.show_image_selection(records)
+        if self.filtered_records:self.defect_list.setCurrentRow(min(10,len(self.filtered_records)-1))
 
     def open_defect_images(self, row: int, column: int) -> None:
         item = self.summary_table.item(row, 0)
@@ -654,6 +679,7 @@ class IvsStudioTab(QWidget):
                 label.setText(f"디코딩 실패\n{path}")
 
     def download_filtered(self) -> None:
+        from ui.image_range import ImageRangeDialog
         checked_codes = self.selected_download_group_codes()
         options = [code for code in self.download_group_code_options() if not checked_codes or code in checked_codes]
         if not options:
@@ -661,12 +687,13 @@ class IvsStudioTab(QWidget):
         if not options:
             QMessageBox.warning(self, _("대상 없음"), _("다운로드할 불량 그룹이 없습니다."))
             return
-        selected_code, ok = QInputDialog.getItem(
-            self, _("다운로드 불량 그룹 선택"), _("다운로드할 불량 그룹"), options, 0, False,
-        )
-        if not ok or not selected_code:
-            return
-        records = [record for record in self.records if record.is_rate_defect and record.ivs_1 == selected_code]
+        counts={code:self.image_catalog.counts()[code] for code in options}
+        self.download_range_dialog=ImageRangeDialog(counts,download=True,parent=self)
+        self.download_range_dialog.submitted.connect(self.download_image_range)
+        self.download_range_dialog.show()
+
+    def download_image_range(self,selected_code,start,end):
+        records = self.image_catalog.download_records(selected_code,start,end)
         if not records:
             QMessageBox.warning(self, _("대상 없음"), f"{selected_code} 그룹에 다운로드할 이미지가 없습니다.")
             return

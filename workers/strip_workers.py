@@ -3,6 +3,7 @@ from __future__ import annotations
 from core.i18n import _
 
 import traceback
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -141,8 +142,12 @@ class FullXmlBarcodeScanThread(QThread):
 
     def run(self) -> None:
         ssh = sftp = None
+        started=time.monotonic()
         try:
             ssh, sftp = connect()
+            connection_seconds=time.monotonic()-started
+            if getattr(sftp,'_dmt_scan_session',False) is True:
+                sftp.bypass_xml_cache=getattr(self,'bypass_xml_cache',False)
             if self.trial_path.strip():
                 trials = [parse_trial_context(self.trial_path)]
                 model = trials[0].model
@@ -192,8 +197,7 @@ class FullXmlBarcodeScanThread(QThread):
                 for strip_id, locations in sorted(barcode_locations.items())
                 if len(locations) > 1
             }
-            self.finished.emit(
-                {
+            payload = {
                     "schema": "dmt-studio-full-xml-barcode-v1",
                     "model": model,
                     "lot_id": lot,
@@ -207,7 +211,12 @@ class FullXmlBarcodeScanThread(QThread):
                     "duplicates": duplicates,
                     "records": records,
                 }
-            )
+            if getattr(sftp,'_dmt_scan_session',False) is True:
+                payload['scan_metrics']=sftp.report()
+                payload['scan_metrics'].update(elapsed_seconds=round(time.monotonic()-started,4),connection_seconds=round(connection_seconds,4))
+                metrics=payload['scan_metrics']
+                self.progress.emit(_('[XML 성능]')+f" {metrics['elapsed_seconds']:.2f}s · "+_('XML 원격 읽기')+f": {metrics['xml_reads']} · "+_('XML 캐시 재사용')+f": {metrics['xml_cache_hits']}")
+            self.finished.emit(payload)
         except Exception:
             self.failed.emit(traceback.format_exc())
         finally:

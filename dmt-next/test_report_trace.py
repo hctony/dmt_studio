@@ -134,15 +134,26 @@ class ReportTraceTests(unittest.TestCase):
         self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1})
         self.assertEqual(report['existing_bbt_ot14_units'],0)
 
-    def test_bbt_is_ot14_regardless_of_rpt_code_and_ski_limits_report_targets(self):
+    def test_selected_strip_bbt_is_ot14_regardless_of_rpt_code_and_ski_membership(self):
         summary,report=self.fixture([(1,1,'1111'),(2,2,'SM03')],[(1,1),(2,2)],bbt=[(1,1),(2,1)])
         rpt=self.root/'bbt'/(self.strip+'.rpt');rpt.write_text(rpt.read_text().replace('OT14','OT03'))
         summary=calculate_yield_summary_by_process([self.root/'gather.txt'],[],[],[],None,4,3,self.root/'bbt',self.root/'final.ski')
         report=build_yield_report_aggregation(summary,'MODEL')
         self.assertEqual(summary['bbt_units'],2)
-        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1,'SM03':1})
-        self.assertEqual(report['existing_bbt_ot14_units'],1)
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':2,'SM03':1})
+        self.assertEqual(report['existing_bbt_ot14_units'],2)
+        self.assertEqual(summary['defective_units'],3)
+        self.assertEqual(summary['good_units'],1)
         self.assertEqual(trace_rows(summary['report_trace'],'OT14')[0][0]['reason'],'bbt')
+
+    def test_bbt_outside_ski_is_included_but_other_strip_rpt_is_not(self):
+        summary,report=self.fixture([(2,1,'SM03')],[(2,1)],bbt=[(1,1)])
+        other=self.root/'bbt'/'OTHER.rpt';other.write_text('X:001 Y:002 = 1 - 9998\n')
+        summary=calculate_yield_summary_by_process([self.root/'gather.txt'],[],[],[],None,4,3,self.root/'bbt',self.root/'final.ski')
+        report=build_yield_report_aggregation(summary,'MODEL')
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1,'SM03':1})
+        self.assertEqual(summary['total_strips'],1);self.assertEqual(summary['defective_units'],2)
+        self.assertEqual(report['final_vs_ski_delta'],1)
 
     def test_xml_outside_nas_root_is_rejected_before_connecting(self):
         row={'strip_id':self.strip,'x':1,'y':1,'code':'1111','reason':'gather','process':'IVS'}

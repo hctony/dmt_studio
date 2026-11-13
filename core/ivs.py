@@ -13,7 +13,7 @@ import paramiko
 from core.models import DefectRecord, TrialContext
 from core.cancellation import check_cancelled
 from core.yield_rates import single_defect_rate
-from core.nas import decode_xml, face_from_def_side, resolve_three_images, normalize_remote_path
+from core.nas import decode_xml, read_xml_root, face_from_def_side, resolve_three_images, normalize_remote_path
 
 
 def parse_float(value: str | None) -> float:
@@ -48,8 +48,7 @@ def parse_ivs_xml(
     check_cancelled(should_stop)
     records: list[DefectRecord] = []
     try:
-        with sftp.open(xml_path, "rb") as fh:
-            root = decode_xml(fh.read())
+        root = read_xml_root(xml_path,sftp)
     except Exception as exc:
         check_cancelled(should_stop)
         if progress:
@@ -108,7 +107,8 @@ def parse_ivs_xml(
                     img_pt_x=parse_float(p_elem.attrib.get("img_pt_x")),
                     img_pt_y=parse_float(p_elem.attrib.get("img_pt_y")),
                     source_xml=xml_path,
-                    images=resolve_three_images(sftp, base_img_path, should_stop),
+                    images=([base_img_path+suffix+'.bmp' for suffix in ('_Sub2','','_Sub1')]
+                            if getattr(sftp,'_dmt_lazy_images',False) is True else resolve_three_images(sftp, base_img_path, should_stop)),
                 )
             )
     return records

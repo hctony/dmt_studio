@@ -11,3 +11,5 @@
 0.4.2의 [IVS 중지·단일 불량률·클라이언트 종료 진단](IVS-CONTROLS.md)을 참고하세요.
 
 0.4.5부터 [성적서 코드 미리보기와 TXT·SKI·XML 원본 추적](REPORT-CODE-PREVIEW.md)을 지원합니다.
+
+0.4.6의 [코드별 대표 이미지·범위 조회·XML 읽기 개선](IVS-PERFORMANCE.md)을 참고하세요. 검사 대상 Strip의 RPT 좌표는 SKI와 관계없이 OT14로 반영합니다.
