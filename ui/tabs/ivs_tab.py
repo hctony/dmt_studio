@@ -364,6 +364,8 @@ class IvsStudioTab(QWidget):
             return
         try:
             payload = records_to_json(model, lot, self.records, (getattr(self, 'current_payload', None) or {}).get('population'))
+            if (getattr(self,'current_payload',None) or {}).get('strip_history'):
+                payload['strip_history']=self.current_payload['strip_history']
             if (getattr(self,'current_payload',None) or {}).get('scan_metrics'):
                 payload['scan_metrics']=self.current_payload['scan_metrics']
             Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

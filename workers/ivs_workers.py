@@ -79,6 +79,7 @@ class IvsScanThread(QThread):
             self.progress.emit(f"Trial {len(trials)}개 스캔 시작")
 
             records: list[DefectRecord] = []
+            strip_history=[]
             strip_ids = set()
             grid_units = set()
             missing_barcodes = parse_errors = 0
@@ -111,6 +112,13 @@ class IvsScanThread(QThread):
                         parsed_xml_count += 1
                         if observed_strip(barcode, grid):
                             folder_barcodes.append(barcode)
+                            try:
+                                metadata=sftp.metadata(xml_path) if getattr(sftp,'_dmt_scan_session',False) is True else sftp.stat(xml_path)
+                                stamp=metadata.st_mtime
+                                stamp=float(stamp) if isinstance(stamp,(int,float)) else None
+                            except (OSError,AttributeError):stamp=None
+                            strip_history.append({'strip_id':barcode.strip().upper(),'machine':ctx.machine,'trial':ctx.trial,
+                                'strip_folder':strip_folder,'source_xml':xml_path,'source_mtime':stamp,'clock_basis':'source_file_mtime'})
                     xml_files = find_ivs_files(strip_path, sftp) if folder_index(strip_folder) in valid_indexes else []
                     for xml_path in xml_files:
                         check_cancelled(self._cancel.is_set)
@@ -128,7 +136,15 @@ class IvsScanThread(QThread):
                         barcode = read_barcode_from_xml(fc, sftp) if fc else None
                         check_cancelled(self._cancel.is_set)
                         if barcode and observed_strip(barcode, 0):
-                            pass
+                            if folder_index(strip_folder) in valid_indexes and not xml_files:
+                                try:
+                                    metadata=sftp.metadata(fc) if getattr(sftp,'_dmt_scan_session',False) is True else sftp.stat(fc)
+                                    stamp=metadata.st_mtime
+                                    stamp=float(stamp) if isinstance(stamp,(int,float)) else None
+                                except (OSError,AttributeError):stamp=None
+                                strip_history.append({'strip_id':barcode.strip().upper(),'machine':ctx.machine,'trial':ctx.trial,
+                                    'strip_folder':strip_folder,'source_xml':fc,'source_mtime':stamp,
+                                    'clock_basis':'source_file_mtime','source_kind':'valid_bundle_fc_only'})
                         elif fc or folder_index(strip_folder) in valid_indexes:
                             missing_barcodes += 1
                     self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': folder_index_done + 1, 'max': len(folders), 'detail': f'{detail} · Strip {folder_index_done + 1}/{len(folders)} · XML {xml_count}'}
@@ -141,6 +157,7 @@ class IvsScanThread(QThread):
                                             'trial' if self.trial_path.strip() else 'lot', parse_errors)
             population['xml_count'] = parsed_xml_count
             payload = records_to_json(model, lot, records, population)
+            payload['strip_history']={'schema':'dmt-its-history-v1','complete':not missing_barcodes and not parse_errors,'events':strip_history}
             if getattr(sftp,'_dmt_scan_session',False) is True:
                 payload['scan_metrics']=sftp.report()
                 payload['scan_metrics'].update(elapsed_seconds=round(time.monotonic()-started,4),connection_seconds=round(connection_seconds,4))

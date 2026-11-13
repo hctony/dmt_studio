@@ -472,6 +472,10 @@ class YieldTab(QWidget):
             return
         self._report_input_snapshot = self.report_input_values()
         self.refresh_result()
+        audit=self.summary.get('its_validation',{})
+        if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
+            from core.its_validation import format_audits
+            QMessageBox.warning(self,_('ITS 검증 미완료'),format_audits(audit)+'\n'+_('소스 누락 또는 SKI 갱신을 확인한 뒤 수율 계산을 다시 실행하세요.'))
 
     def report_input_values(self):
         names=('model_in','vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in',
@@ -671,6 +675,10 @@ class YieldTab(QWidget):
     def export_excel(self) -> None:
         if not self.report_ready():
             return
+        audit=self.summary.get('its_validation',{})
+        if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
+            QMessageBox.warning(self,_('ITS 검증 미완료'),_('최신 이력·누락 좌표·SKI 갱신 상태를 확인하고 수율을 다시 계산하세요.'))
+            return
         if not self.summary:
             QMessageBox.warning(self, _("저장 없음"), _("먼저 수율 계산을 실행하세요."))
             return
@@ -720,6 +728,9 @@ class YieldTab(QWidget):
         summary = self.summary
         if summary.get("mode") == "process":
             self.refresh_process_result(summary)
+            if summary.get('its_validation',{}).get('enabled'):
+                from core.its_validation import format_audits
+                self.result.append('\n'+format_audits(summary['its_validation']))
             return
         self.result.setPlainText(
             f"LOT: {summary['lot_id']}\n"

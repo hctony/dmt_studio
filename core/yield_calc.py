@@ -783,7 +783,18 @@ def calculate_yield_summary_by_process(
     bbt_code_map = load_skipdata_code_folder(skipdata_path)
     ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     ivs_origins = {}
+    from core.report_trace import file_version
+    watched_paths=list(vrs_paths)+list(fvi_paths)+list(ivs_paths or [])+list(ivs_json_paths or [])+([ski_path] if ski_path else [])
+    input_versions={str(p):file_version(p) for p in watched_paths}
     ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins)
+    from core.its_validation import load_history,validate_strip,source_metadata
+    its_history=load_history(ivs_json_paths or [])
+    retired_ivs={}
+    for strip,epoch in its_history.items():
+        retired_ivs[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if (r.machine,r.trial)!=(epoch['machine'],epoch['trial'])]
+        ivs_records_by_strip[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if (r.machine,r.trial)==(epoch['machine'],epoch['trial'])]
+    if its_history:
+        ivs_dummy_scrap_strips={strip for strip,items in ivs_records_by_strip.items() if any(r.is_dummy_9999 for r in items)}
     process_priority = ["IVS", "VRS", "FVI"]
     process_inputs = {
         "VRS": vrs_paths,
@@ -800,7 +811,8 @@ def calculate_yield_summary_by_process(
         if filters and process not in filters:
             continue
         selected = {}
-        blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected) if paths else ({}, 0)
+        blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected, its_history,
+            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0) if paths else ({}, 0)
         process_selected_sources[process] = selected
         process_blocks[process] = blocks
         process_replaced[process] = replaced
@@ -847,6 +859,7 @@ def calculate_yield_summary_by_process(
     full_unit_without_xout_over_limit_rows: list[dict] = []
     xout_consistency_rows: list[dict] = []
     report_ski_total_units = 0
+    its_audits=[]
 
     for strip_id in sorted(expected_strip_ids):
         bbt_coords = set(bbt_map.get(strip_id, set()))
@@ -858,11 +871,18 @@ def calculate_yield_summary_by_process(
             only_by_process[present_processes[0]].append(strip_id)
 
         by_process_code: dict[str, dict[str, set[tuple[int, int]]]] = {}
+        xml_x_count=infer_x_count_for_strip(units_per_strip,[bbt_coords,set(ski_map.get(strip_id,set())),
+            set().union(*(gather_line_coords(blocks[strip_id].defect_lines) for blocks in process_blocks.values() if strip_id in blocks))])
         merged_by_code: dict[str, set[tuple[int, int]]] = defaultdict(set)
         process_coord_counts: dict[str, int] = {}
         for process, blocks in process_blocks.items():
             block = blocks.get(strip_id)
             by_code = coords_by_code(block.defect_lines) if block else {}
+            if process=='IVS' and strip_id in its_history:
+                for record in ivs_records_by_strip.get(strip_id,[]):
+                    coord=unit_idx_to_xy(record.unit_idx,xml_x_count)
+                    if record.is_rate_defect and coord:by_code.setdefault(record.ivs_1,set()).add(coord)
+            if strip_id in its_history:by_code.pop('9998',None)
             by_process_code[process] = by_code
             merge_code_coords(merged_by_code, by_code)
             process_coords = set().union(*by_code.values()) if by_code else set()
@@ -880,6 +900,28 @@ def calculate_yield_summary_by_process(
             units_per_strip,
             [bbt_coords, gather_coords, ski_coords_for_strip],
         )
+        if strip_id in its_history:
+            epoch=its_history[strip_id]
+            raw={stage:coords_by_code(blocks[strip_id].defect_lines) for stage,blocks in process_blocks.items() if strip_id in blocks}
+            stamps={stage:blocks[strip_id].source_mtime for stage,blocks in process_blocks.items() if strip_id in blocks}
+            xml_mapping_valid=True
+            for record in ivs_records_by_strip.get(strip_id,[]):
+                if record.is_dummy:continue
+                coord=unit_idx_to_xy(record.unit_idx,x_count_for_strip)
+                if coord is None:xml_mapping_valid=False;continue
+                raw.setdefault('IVS',{}).setdefault(record.ivs_1,set()).add(coord)
+            pending=set(raw.get('IVS',{}).get('9998',()))
+            reviewed=not pending or ('VRS' in stamps and stamps['VRS']>=stamps.get('IVS',epoch['epoch_start'])
+                and not pending.intersection(raw.get('VRS',{}).get('9998',())))
+            source_present='IVS' in raw or not ivs_records_by_strip.get(strip_id)
+            if strip_id in ivs_dummy_scrap_strips:
+                raw['IVS']={'SM03_DUMMY9999':full_unit_coords(x_count_for_strip,units_per_strip//x_count_for_strip)}
+            audit=validate_strip(raw,bbt_coords,ski_coords_for_strip,history_verified=reviewed and source_present and xml_mapping_valid,
+                ski_scope_verified=bool(ski_path and ski_path.is_file()),inspection_times=stamps,
+                ski_time=ski_path.stat().st_mtime if ski_path and ski_path.is_file() else None,
+                retired_coords={c for r in retired_ivs.get(strip_id,[]) if r.is_rate_defect and (c:=unit_idx_to_xy(r.unit_idx,x_count_for_strip))},epoch_start=epoch['epoch_start'])
+            audit.update(strip_id=strip_id,machine=epoch['machine'],trial=epoch['trial'],epoch_start=epoch['epoch_start'],clock_basis='source_file_mtime')
+            its_audits.append(audit)
         is_ivs_dummy_scrap = strip_id in ivs_dummy_scrap_strips
         if is_ivs_dummy_scrap:
             full_coords = full_unit_coords(x_count_for_strip, units_per_strip // x_count_for_strip) if x_count_for_strip else set()
@@ -1108,6 +1150,9 @@ def calculate_yield_summary_by_process(
         )
 
     table_bbt_units = sum(int(row.get("bbt_count", 0)) for row in per_strip_rows)
+    if any(file_version(path)!=version for path,version in input_versions.items()):
+        for audit in its_audits:
+            audit.update(status='HISTORY_UNVERIFIED',auto_pass=False,input_changed_during_calculation=True)
     table_bbt_strip_count = sum(1 for row in per_strip_rows if int(row.get("bbt_count", 0)) > 0)
     table_strip_ids = {str(row.get("strip_id", "")) for row in per_strip_rows}
     existing_bbt_code_coords: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
@@ -1214,6 +1259,8 @@ def calculate_yield_summary_by_process(
         "process_code_distribution": process_code_distribution,
         "report_code_distribution": report_code_distribution,
         "report_trace": report_trace.snapshot(),
+        "its_validation": {'enabled':bool(its_history),'strips':its_audits,'auto_pass':bool(its_audits) and all(a['auto_pass'] for a in its_audits) and set(expected_strip_ids).issubset(its_history),
+            'untracked_strips':sorted(set(expected_strip_ids)-set(its_history)) if its_history else []},
         "report_process_code_distribution": report_process_code_distribution,
         "report_process_defect_distribution": report_process_defect_distribution,
         "ski_defect_units_for_report": report_ski_total_units,

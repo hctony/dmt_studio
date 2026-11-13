@@ -71,6 +71,9 @@ def remember(model: str, lot: str, *, payload=None, kind='', output=None, config
             # change underneath Yield when the same stage is rerun.
             target = _root() / key / (kind + '-' + uuid4().hex + '.txt')
             _write(target, output)
+            if config and config.get('source_history'):
+                _write(target.with_suffix('.txt.its.json'),json.dumps({'sha256':hashlib.sha256(output.encode('utf-8')).hexdigest(),
+                    'strips':config['source_history']},ensure_ascii=False))
             updates[kind.lower() + '_txt_in'] = str(target.resolve())
         if config is not None:
             units = int(config['x_count']) * int(config['y_count'])
@@ -93,6 +96,11 @@ def remember(model: str, lot: str, *, payload=None, kind='', output=None, config
 def latest():
     data = _read()
     return data.get('contexts', {}).get(data.get('active'), {})
+
+
+def context(model,lot):
+    key=hashlib.sha256((model.strip().upper()+'\n'+lot.strip().upper()).encode()).hexdigest()
+    return _read().get('contexts',{}).get(key,{})
 
 
 def remember_payload(payload, kind):

@@ -48,7 +48,7 @@ class GatheringWorker(QThread):
         excluded_strip_ids: set[str],
         skipdata_path: str = "",
         ski_path: str = "",
-        lookback_days: int = 0,
+        lookback_days: int = 30,
     ):
         super().__init__()
         self.mode = mode
@@ -64,7 +64,7 @@ class GatheringWorker(QThread):
         self.excluded_strip_ids = excluded_strip_ids
         self.skipdata_path = skipdata_path
         self.ski_path = ski_path
-        self.lookback_days = max(0, int(lookback_days))
+        self.lookback_days = min(30, max(1, int(lookback_days or 30)))
         self._stop = False
         import threading
         self.rework_event = threading.Event()
@@ -143,10 +143,18 @@ class GatheringWorker(QThread):
 
             # 날짜 비교를 위한 파싱된 모든 아이템 수집
             all_items = [item for items in parsed_by_path.values() for _, item in items]
+            from core.its_validation import load_history
+            from core.yield_handoff import context
+            previous=context(self.model,self.lot);epoch_history={}
+            if previous.get('model','').upper()==self.model.upper() and previous.get('lot','').upper()==self.lot.upper():
+                ivs_source=previous.get('fields',{}).get('ivs_json_in',{}).get('value')
+                if ivs_source and Path(ivs_source).is_file():epoch_history=load_history([Path(ivs_source)])
             if all_items:
                 from datetime import datetime
                 unique_dates = {datetime.fromtimestamp(item.source_mtime).strftime("%Y-%m-%d") for item in all_items}
-                if len(unique_dates) > 1:
+                from core.its_validation import overlapping_history_dates
+                repeated_dates=overlapping_history_dates(all_items)
+                if len(unique_dates) > 1 and any(strip not in epoch_history for strip in repeated_dates):
                     self.progress.emit(f"[재작업 체크] 데이터에 여러 날짜가 존재합니다. 사용자 확인 대기 중...")
                     self.date_selection_required.emit(sorted(list(unique_dates)))
                     self.rework_event.wait()
@@ -154,6 +162,8 @@ class GatheringWorker(QThread):
                         return
                     if self.rework_start_timestamp > 0.0:
                         self.progress.emit(f"[필터링] 선택된 날짜 기준 필터링 적용")
+                elif len(unique_dates)>1:
+                    self.progress.emit('[ITS] 날짜 간 중복 Strip 없음: 날짜 선택 없이 전체 반영')
 
             for path in paths:
                 if self._stop:
@@ -169,12 +179,19 @@ class GatheringWorker(QThread):
                     if self.rework_start_timestamp > 0.0 and candidate.source_mtime < self.rework_start_timestamp:
                         continue
                     key = candidate.strip_id.upper()
+                    epoch=epoch_history.get(key)
+                    if epoch and candidate.source_mtime<epoch['epoch_start']:continue
                     target = merged.get(key)
                     if target is None:
                         merged[key] = candidate
                     else:
-                        duplicate_conflicts.append(build_gather_duplicate_conflict(target, candidate, bbt_map, ski_map))
-                        if not should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map):
+                        if epoch:
+                            from core.its_validation import epoch_candidate
+                            ski_stamp=Path(self.ski_path).stat().st_mtime if self.ski_path and Path(self.ski_path).is_file() else 0
+                            candidate=epoch_candidate(target,candidate,bbt_map.get(key,set()),ski_map.get(key,set()),ski_stamp)
+                        if not epoch:duplicate_conflicts.append(build_gather_duplicate_conflict(target, candidate, bbt_map, ski_map))
+                        replace=candidate.source_mtime>=target.source_mtime if epoch else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)
+                        if not replace:
                             target.replaced_count += candidate.replaced_count + 1
                             target.sources = unique_lines(target.sources + candidate.sources)
                             continue

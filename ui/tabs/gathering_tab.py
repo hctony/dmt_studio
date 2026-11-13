@@ -423,6 +423,7 @@ class GatheringModePage(QWidget):
         if getattr(self, 'run_context', None) and not getattr(self.worker, '_stop', False):
             from core.yield_handoff import remember
             context = self.run_context
+            context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
             remember(context['model'], context['lot'], kind=self.mode, output=output, config=context)
         warning_text = self.format_parent_warnings(summary.get("parent_warnings", []))
         cache = summary.get("cache", {})
@@ -588,10 +589,9 @@ class GatheringTab(QWidget):
         restore_line_edit(self.skipdata_in, "gathering/skipdata")
         restore_line_edit(self.ski_in, "gathering/ski")
         self.search_period = QComboBox()
-        self.search_period.addItem(_("최근 31일"), 31)
+        self.search_period.addItem(_("최근 30일"), 30)
         self.search_period.addItem(_("최근 7일"), 7)
-        self.search_period.addItem(_("전체 기간"), 0)
-        index = self.search_period.findData(int(APP_SETTINGS.value('gathering/lookback_days',31)))
+        index = self.search_period.findData(int(APP_SETTINGS.value('gathering/lookback_days',30)))
         self.search_period.setCurrentIndex(max(0,index))
         self.search_period.currentIndexChanged.connect(lambda: APP_SETTINGS.setValue('gathering/lookback_days',self.search_period.currentData()))
         browse_json = QPushButton(_("JSON 선택"))
@@ -790,6 +790,7 @@ class GatheringTab(QWidget):
         out_file.write_text(output, encoding="utf-8")
         if not getattr(self.batch_worker, '_stop', False):
             from core.yield_handoff import remember
+            context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
             remember(context['model'], lot, kind=mode, output=output, config=context)
         
         self.batch_dialog.append_log(f"★ {mode} 공정 추출 완료: {out_file}\n")

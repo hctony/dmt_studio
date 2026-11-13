@@ -13,3 +13,5 @@
 0.4.5부터 [성적서 코드 미리보기와 TXT·SKI·XML 원본 추적](REPORT-CODE-PREVIEW.md)을 지원합니다.
 
 0.4.6의 [코드별 대표 이미지·범위 조회·XML 읽기 개선](IVS-PERFORMANCE.md)을 참고하세요. 검사 대상 Strip의 RPT 좌표는 SKI와 관계없이 OT14로 반영합니다.
+
+0.4.7의 [ITS 최신 Trial·9998 재판정·SKI 검증](ITS-HISTORY.md)은 업데이트 후 IVS 전체 수집으로 새 이력을 만든 뒤 사용합니다.

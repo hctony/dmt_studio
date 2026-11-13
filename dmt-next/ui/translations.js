@@ -474,5 +474,21 @@ window.DMT_TRANSLATIONS = {
   "이미지 저장 폴더": "影像儲存資料夾",
   "저장할 데이터가 없습니다. 먼저 스캔을 실행하세요.": "沒有可儲存的資料，請先執行掃描。",
   "Rework(9998) {rework_9998_count}건 | Dummy {dummy_records}건 | Dummy 9999 {dummy_9999_count}건": "Rework(9998) {rework_9998_count} 筆 | Dummy {dummy_records} 筆 | Dummy 9999 {dummy_9999_count} 筆",
-  "전체 {total_records}건 | 불량 Unit {total_defect_units_excluding_rework_dummy}개 | ": "全部 {total_records} 筆 | 不良 Unit {total_defect_units_excluding_rework_dummy} 個 | "
+  "전체 {total_records}건 | 불량 Unit {total_defect_units_excluding_rework_dummy}개 | ": "全部 {total_records} 筆 | 不良 Unit {total_defect_units_excluding_rework_dummy} 個 | ",
+  "최근 30일": "最近 30 天",
+  "[ITS] 날짜 간 중복 Strip 없음: 날짜 선택 없이 전체 반영": "[ITS] 不同日期沒有重複 Strip：自動合併全部日期",
+  "ITS 최신 이력 검증": "ITS 最新歷程驗證",
+  "정상 일치": "正常一致",
+  "검사 이력 확인 필요": "需確認檢查歷程",
+  "소스 좌표 누락": "原始資料缺少座標",
+  "SKI 갱신 필요": "需更新 SKI",
+  "좌표 불일치": "座標不一致",
+  "SKI에만 있는 좌표": "僅 SKI 中的座標",
+  "SKI 갱신 대상 좌표": "需要更新至 SKI 的座標",
+  "XML 이력 없는 Strip": "沒有 XML 歷程的 Strip",
+  "ITS 검증 미완료": "ITS 驗證尚未完成",
+  "최신 이력·누락 좌표·SKI 갱신 상태를 확인하고 수율을 다시 계산하세요.": "請確認最新歷程、缺少的座標及 SKI 更新狀態，再重新計算良率。",
+  "소스 누락 또는 SKI 갱신을 확인한 뒤 수율 계산을 다시 실행하세요.": "請確認原始資料缺漏或 SKI 更新後，再次計算良率。",
+  "IVS 검사 이력이 불완전합니다. IVS 전체 수집을 다시 실행하세요.": "IVS 檢查歷程不完整，請重新執行完整 IVS 收集。",
+  "설비·Trial 시각을 확인할 수 없어 최신 검사 이력을 확정할 수 없습니다.": "無法確認設備與 Trial 時間，因此無法判定最新檢查歷程。"
 };
