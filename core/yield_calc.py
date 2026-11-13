@@ -1029,7 +1029,8 @@ def calculate_yield_summary_by_process(
                     process_code_to_coords[f"{process}:{code}"].add((strip_id, x, y))
                     if (x, y) in report_remaining:
                         reason = 'ivs_recovery' if process == 'IVS' and (code,(x,y)) in recovered_ivs_coords else 'gather'
-                        if code == 'UNKNOWN' and any(parse_xy_from_gather_line(line)==(x,y) and not line.split(',')[-1].strip()
+                        if code == 'UNKNOWN' and any(parse_xy_from_gather_line(line)==(x,y) and
+                            (len(parts := line.split(','))<6 or not parts[5].strip())
                             for line in process_blocks.get(process,{}).get(strip_id,GatherStrip('',strip_id)).defect_lines):
                             reason = 'missing_code'
                         report_trace.add(strip_id,code,process,(x,y),reason)

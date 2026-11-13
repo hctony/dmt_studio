@@ -72,6 +72,13 @@ class ReportTraceTests(unittest.TestCase):
         info=summary['report_trace']['strips'][self.strip]['processes']['VRS']
         self.assertEqual(info['selected_source'],str(self.root/'gather.txt'));self.assertIn(str(extra),info['sources'])
 
+    def test_unknown_uses_sixth_column_even_with_extra_or_trailing_columns(self):
+        summary,report=self.fixture([(1,1,',metadata'),(2,1,'UNKNOWN,')],[(1,1),(2,1)])
+        rows,total=trace_rows(summary['report_trace'],'UNKNOWN');self.assertEqual(total,2)
+        reasons={(r['x'],r['y']):r['reason'] for r in rows}
+        self.assertEqual(reasons,{(1,1):'missing_code',(2,1):'gather'})
+        self.assertIn('▶ L2:',live_text(summary['report_trace'],self.root/'gather.txt',self.strip,(1,1),'txt'))
+
     def test_json_1111_recovery_keeps_exact_source_record_and_normalizes_other_codes(self):
         xml=self.root/'actual.xml';xml.write_text(f'<Root barcode="{self.strip}"><Unit><P0 unit_idx="3" ivs_1="1111"/><P1 unit_idx="0" ivs_1="SM03"/></Unit></Root>')
         full=[(1,1),(2,1),(1,2),(2,2)]

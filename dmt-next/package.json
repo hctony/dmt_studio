@@ -1,6 +1,6 @@
 {
   "name": "dmt-analysis-next",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "main": "desktop.js",
   "scripts": {

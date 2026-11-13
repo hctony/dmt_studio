@@ -100,7 +100,7 @@ def read_text_matches(path,strip,coord,kind,check=lambda:None):
             elif kind=='ski':
                 selected=len(parts)>=3 and parts[0].upper()==strip
             else:
-                selected=len(parts)>=6 and parts[1].upper()==strip and parse_xy_from_gather_line(line)==coord
+                selected=len(parts)>=4 and parts[1].upper()==strip and parse_xy_from_gather_line(line)==coord
             if selected:
                 exact=kind!='ski' or len(parts)>=3 and parts[1:3]==[str(coord[0]),str(coord[1])]
                 # Compare numeric coordinates even when the SKI is zero-padded.
@@ -131,8 +131,8 @@ def xml_excerpt(data,row,info):
         for element in parent:
             if not element.tag.split('}')[-1].upper().startswith('P'):
                 continue
-            dummy=parent.tag.split('}')[-1].lower()=='dummy' or element.attrib.get('unit_idx')=='-1'
-            match=dummy and element.attrib.get('ivs_1')=='9999' if row['reason']=='dummy9999' else element.attrib.get('unit_idx')==wanted
+            dummy=parent.tag.split('}')[-1].lower()=='dummy' or element.attrib.get('unit_idx','').strip()=='-1'
+            match=dummy and element.attrib.get('ivs_1','').strip()=='9999' if row['reason']=='dummy9999' else element.attrib.get('unit_idx','').strip()==wanted
             if match:
                 matches.append(E.tostring(element,encoding='unicode')[:12000])
     barcodes=sorted({e.attrib['barcode'] for e in root.iter() if e.attrib.get('barcode')})

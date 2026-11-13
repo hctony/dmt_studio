@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory() as data:
     txt=fixture/'gather.txt';txt.write_text('1,TEST-,TEST-01\nTEST-,TEST-01,1,1,T,1111\nTEST-,TEST-01,EOS\n')
     ski=fixture/'final.ski';ski.write_text('TEST-01,1,1\nTEST-01,2,1\n')
     xml=fixture/'original.xml';xml.write_text('<Root barcode="TEST-01"><Unit><P0 unit_idx="0" ivs_1="1111"/></Unit></Root>')
-    ivs=fixture/'ivs.json';ivs.write_text(json.dumps({'lot_id':'TEST-','records':[{'strip_id':'TEST-01','machine':'A','model':'M','lot':'TEST-','trial':'T','strip_folder':'1','container':'Unit','face':'T','unit_idx':'0','img_merge_idx':'0','ivs_1':'1111','code_main':'1111','code_sub':'','def_side':'F','strip_pt_x':1,'strip_pt_y':1,'img_pt_x':0,'img_pt_y':0,'source_xml':str(xml),'images':[]}]}))
+    ivs=fixture/'ivs.json';ivs.write_text(json.dumps({'schema':'dmt-studio-ivs-v1','lot_id':'TEST-','model':'M','records':[{'strip_id':'TEST-01','machine':'A','model':'M','lot':'TEST-','trial':'T','strip_folder':'1','container':'Unit','face':'T','unit_idx':'0','img_merge_idx':'0','ivs_1':'1111','code_main':'1111','code_sub':'','def_side':'F','strip_pt_x':1,'strip_pt_y':1,'img_pt_x':0,'img_pt_y':0,'source_xml':str(xml),'images':[]}]}))
     process=subprocess.Popen([str(backend),'--gui'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf8',env=dict(os.environ,DMT_DATA_DIR=data,QT_QPA_PLATFORM='offscreen'),cwd=data)
     output=queue.Queue()
     def read_output():
