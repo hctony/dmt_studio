@@ -693,7 +693,7 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
     existing_bbt_codes = {
         str(key): int(value)
         for key, value in (
-            {"OT14": summary.get("report_code_distribution", {}).get("OT14", 0)}
+            {"OT14": (summary.get("report_process_code_distribution") or {}).get("BBT:OT14", 0)}
             if summary.get("report_code_distribution")
             else summary.get("existing_bbt_code_distribution") or {}
         ).items()
@@ -1237,7 +1237,7 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
     existing_bbt_codes = {
         str(key): int(value)
         for key, value in (
-            {"OT14": summary.get("report_code_distribution", {}).get("OT14", 0)}
+            {"OT14": (summary.get("report_process_code_distribution") or {}).get("BBT:OT14", 0)}
             if summary.get("report_code_distribution")
             else summary.get("existing_bbt_code_distribution") or {}
         ).items()

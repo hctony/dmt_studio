@@ -123,6 +123,27 @@ class ReportTraceTests(unittest.TestCase):
         text=live_text(summary['report_trace'],candidates[0],self.strip,(2,1),'rpt')
         self.assertIn('▶ L4:',text);self.assertNotIn('L2:',text)
 
+    def test_report_ot14_counts_bbt_and_process_txt_once_each(self):
+        summary,report=self.fixture([(2,1,'OT14')],[(1,1),(2,1)],bbt=[(1,1)])
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':2})
+        self.assertEqual(report['existing_bbt_ot14_units'],1)
+        self.assertEqual(report['final_defects_by_code_including_bbt']['OT14']['process_breakdown'],{'BBT':1,'VRS':1})
+        self.assertEqual(trace_rows(summary['report_trace'],'OT14')[1],2)
+        # A process-only OT14 must not also be added as if it came from BBT.
+        summary,report=self.fixture([(2,1,'OT14')],[(2,1)])
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1})
+        self.assertEqual(report['existing_bbt_ot14_units'],0)
+
+    def test_bbt_is_ot14_regardless_of_rpt_code_and_ski_limits_report_targets(self):
+        summary,report=self.fixture([(1,1,'1111'),(2,2,'SM03')],[(1,1),(2,2)],bbt=[(1,1),(2,1)])
+        rpt=self.root/'bbt'/(self.strip+'.rpt');rpt.write_text(rpt.read_text().replace('OT14','OT03'))
+        summary=calculate_yield_summary_by_process([self.root/'gather.txt'],[],[],[],None,4,3,self.root/'bbt',self.root/'final.ski')
+        report=build_yield_report_aggregation(summary,'MODEL')
+        self.assertEqual(summary['bbt_units'],2)
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1,'SM03':1})
+        self.assertEqual(report['existing_bbt_ot14_units'],1)
+        self.assertEqual(trace_rows(summary['report_trace'],'OT14')[0][0]['reason'],'bbt')
+
     def test_xml_outside_nas_root_is_rejected_before_connecting(self):
         row={'strip_id':self.strip,'x':1,'y':1,'code':'1111','reason':'gather','process':'IVS'}
         worker=ReportEvidenceWorker({'strips':{self.strip:{'x_count':2}}},row,'MODEL',self.lot)
