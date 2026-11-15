@@ -15,18 +15,21 @@ Windows용 Electron 분석 앱입니다. 기존 10개 탭의 동작·계산 로�
 
 ## 기능과 검증
 
+0.4.8부터 [Go 중앙 수집·호기별 검증·원본 추적](dmt-next/COLLECTION-SERVICE.md)을 제공합니다. A PC의 원본·LOT 인덱스를 공유하고, 미완료 수집과 UNKNOWN 좌표가 남은 성적서 저장을 차단합니다.
+
 0.3.0부터 [LOT 테스트 기록과 스마트 입력](dmt-next/WORKFLOW-LEARNING.md)을 제공합니다. 같은 모델의 성공 LOT 3개를 기록하면 반복 경로와 입력값을 추천하고 선택한 항목을 자동입력할 수 있습니다.
 
 [기능 연결표와 테스트 범위](dmt-next/FEATURES.md)를 참고하세요. 실제 대만 NAS 권한·데이터 형식 변형·대규모 작업은 현장에서 확인해야 합니다.
 
 ## 개발과 빌드
 
-Python 3.11 이상과 Node.js 22 이상이 필요합니다.
+Python 3.11 이상, Node.js 22 이상, Go 1.23 이상이 필요합니다.
 
 ```powershell
 pip install -r requirements.txt
 cd dmt-next
 npm ci
+go build -trimpath -o collector-bin/dmt-collector.exe ../collector
 npm start
 ```
 

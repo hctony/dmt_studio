@@ -11,6 +11,7 @@ files:
   - network-server.js
   - measurement.js
   - diagnostics.js
+  - collector-service.js
   - assets/tray.ico
   - ui/studio.html
   - ui/studio.js
@@ -25,6 +26,8 @@ files:
   - ui/translations.json
   - package.json
 extraResources:
+  - from: collector-bin
+    to: collector
   - from: backend-dist/dmt-service
     to: backend
 win:

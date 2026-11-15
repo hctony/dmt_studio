@@ -20,3 +20,10 @@ yield_model_settings.json
 **/measurements.jsonl*
 **/diagnostics/
 **/nas-xml.sqlite*
+**/collector-bin/
+**/collector/
+!collector/
+!collector/*.go
+!collector/go.mod
+**/collection-index.sqlite*
+**/collection-runs/

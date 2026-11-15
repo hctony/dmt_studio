@@ -460,6 +460,27 @@ class GuiTests(unittest.TestCase):
         data=self.c.widget(label)['src'];preview=QImage.fromData(base64.b64decode(data.split(',',1)[1]));self.assertEqual(preview.width(),1600);self.assertEqual(label.property('dmt_full_pixmap').width(),3200)
         text='a'*80000;tab.info.setPlainText(text);view=self.c.widget(tab.info);self.assertEqual(len(view['text']),50000);self.assertTrue(view['truncated']);self.assertEqual(tab.info.toPlainText(),text)
 
+    def test_partial_collection_displays_host_status_and_blocks_official_txt(self):
+        from ui.tabs.gathering_tab import GatheringModePage
+        page=self.tab(3).findChildren(GatheringModePage)[0]
+        host={'path':'offline-pc','state':'incomplete','found':0,'processed':0,'errors':['NETWORK_OFFLINE'],'matched_strips':0}
+        summary={'total_strips':0,'excluded_strip_count':0,'discarded_strip_count':0,'xout_distribution':{},'collection':{'complete':False,'mode':'VRS','hosts':[host]}}
+        page.on_finished([], '', summary)
+        self.assertFalse(page.btn_export.isEnabled());self.assertEqual(page.status_table.columnCount(),8)
+        self.assertEqual(page.status_table.item(0,0).text(),'offline-pc')
+        self.assertIn('NETWORK_OFFLINE',page.result.toPlainText())
+        self.answers['save']=str(self.root/'forbidden.txt');page.export_txt()
+        self.assertFalse((self.root/'forbidden.txt').exists())
+
+    def test_partial_collection_or_unknown_prevents_official_excel(self):
+        tab=self.tab(6);self.answers['save']=str(self.root/'forbidden.xlsx')
+        for complete,unknown in ((False,0),(True,1)):
+            tab.summary={'collection_validation':{'enabled':True,'complete':complete},'report_code_distribution':{'UNKNOWN':unknown}}
+            tab._report_input_snapshot=None
+            self.action(tab.btn_export_excel,'click')
+            self.assertFalse((self.root/'forbidden.xlsx').exists())
+            self.assertIn('UNKNOWN',self.dialogs[-1][1]['text'])
+
     def test_remote_revalidates_inherited_paths_and_locks_busy_inputs(self):
         tab=self.tab(6)
         for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):

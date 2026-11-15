@@ -1,7 +1,8 @@
 """Persist completed workflow inputs, isolated by model and LOT.
 
-These are application data, never release assets. Only complete, reviewed
-gathering results and original scan payloads may be registered here.
+These are application data, never release assets. Reviewed gathering results
+and original scan payloads are registered here. Incomplete native collections
+carry a bound draft receipt so downstream calculations cannot reuse stale success.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ def _write(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.' + uuid4().hex + '.tmp')
     try:
-        temporary.write_text(content, encoding='utf-8')
+        temporary.write_text(content, encoding='utf-8',newline='\n')
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -71,9 +72,9 @@ def remember(model: str, lot: str, *, payload=None, kind='', output=None, config
             # change underneath Yield when the same stage is rerun.
             target = _root() / key / (kind + '-' + uuid4().hex + '.txt')
             _write(target, output)
-            if config and config.get('source_history'):
-                _write(target.with_suffix('.txt.its.json'),json.dumps({'sha256':hashlib.sha256(output.encode('utf-8')).hexdigest(),
-                    'strips':config['source_history']},ensure_ascii=False))
+            if config and (config.get('source_history') or config.get('collection_receipt')):
+                _write(target.with_suffix('.txt.its.json'),json.dumps({'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),
+                    'strips':config.get('source_history',{}),'collection_receipt':config.get('collection_receipt')},ensure_ascii=False))
             updates[kind.lower() + '_txt_in'] = str(target.resolve())
         if config is not None:
             units = int(config['x_count']) * int(config['y_count'])

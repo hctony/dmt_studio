@@ -675,6 +675,10 @@ class YieldTab(QWidget):
     def export_excel(self) -> None:
         if not self.report_ready():
             return
+        collection=self.summary.get('collection_validation',{})
+        if collection.get('enabled') and (not collection.get('complete') or self.summary.get('report_code_distribution',{}).get('UNKNOWN',0)):
+            QMessageBox.warning(self,_('수집 검증 미완료'),_('미완료 호기 또는 UNKNOWN 좌표를 확인하고 다시 수집·계산하세요. 성적서는 저장하지 않았습니다.'))
+            return
         audit=self.summary.get('its_validation',{})
         if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
             QMessageBox.warning(self,_('ITS 검증 미완료'),_('최신 이력·누락 좌표·SKI 갱신 상태를 확인하고 수율을 다시 계산하세요.'))
@@ -728,6 +732,10 @@ class YieldTab(QWidget):
         summary = self.summary
         if summary.get("mode") == "process":
             self.refresh_process_result(summary)
+            collection=summary.get('collection_validation',{})
+            if collection.get('enabled'):
+                from core.collection import format_report
+                self.result.append('\n'+format_report(collection))
             if summary.get('its_validation',{}).get('enabled'):
                 from core.its_validation import format_audits
                 self.result.append('\n'+format_audits(summary['its_validation']))

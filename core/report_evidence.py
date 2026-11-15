@@ -10,10 +10,13 @@ from core.utils import unit_idx_to_xy
 from core.i18n import _
 
 
-def local_allowed(path):
+def local_allowed(path,trace=None):
     if os.environ.get('DMT_REMOTE_SESSION')=='1':
         from remote_paths import allowed_path
         if not allowed_path(path):
+            if trace:
+                from core.collection import snapshot_allowed
+                if snapshot_allowed(path,trace):return
             raise PermissionError(_("A PC에서 허용한 데이터 폴더를 선택하세요."))
 
 
@@ -62,6 +65,10 @@ def frozen_text(trace,row):
         _('계산에 사용한 X 폭')+': '+str(info.get('x_count',0)),
         f"SKI: {coord in info.get('ski_coords',[])} / BBT: {coord in info.get('bbt_coords',[])}",
         _('좌표 환산 Unit index (0 기준)')+': '+str((row['y']-1)*info.get('x_count',0)+row['x']-1)]
+    if trace.get('collection_validation',{}).get('enabled'):
+        from core.collection import format_report
+        lines+=['',format_report(trace['collection_validation'])]
+        if row['code']=='UNKNOWN':lines.append(_('미완료 호기는 원인 후보이며 이 좌표의 판정 호기로 확정된 것은 아닙니다.'))
     for process,data in info.get('processes',{}).items():
         matches=[line for line in data.get('defect_lines',[]) if parse_xy_from_gather_line(line)==tuple(coord)]
         lines+=['',f'[{process}]',_('계산에 선택된 파일')+': '+data.get('selected_source','')]
@@ -87,8 +94,8 @@ def text_encoding(path):
         return 'cp949'
 
 
-def read_text_matches(path,strip,coord,kind,check=lambda:None):
-    local_allowed(path);hits=[];current=Path(path).stem.upper()
+def read_text_matches(path,strip,coord,kind,check=lambda:None,trace=None):
+    local_allowed(path,trace);hits=[];current=Path(path).stem.upper()
     with Path(path).open('r',encoding=text_encoding(path),errors='replace') as file:
         for number,raw in enumerate(file,1):
             check();line=raw.strip();parts=[value.strip() for value in line.split(',')]
@@ -117,7 +124,7 @@ def live_text(trace,path,strip,coord,kind,check=lambda:None):
     before=trace.get('file_versions',{}).get(str(path));current=file_version(path)
     state=_('계산 후 파일 변경됨') if before is not None and current!=before else _('계산 시점과 파일 크기·수정 시각 일치') if before is not None else _('계산 시점 버전 미기록')
     header=f'{path}\n{state}'
-    hits=read_text_matches(path,strip,coord,kind,check)
+    hits=read_text_matches(path,strip,coord,kind,check,trace)
     return header+'\n'+('\n'.join(hits) if hits else _('해당 Strip·좌표의 원문 없음'))
 
 

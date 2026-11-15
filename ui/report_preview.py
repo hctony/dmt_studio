@@ -22,6 +22,10 @@ class ReportPreviewDialog(QDialog):
         self.destroyed.connect(lambda:setattr(self,'_closed',True))
         layout=QVBoxLayout(self)
         layout.addWidget(QLabel(f"{report.get('model_name','')} / {report.get('lot_id','')} · "+_('전체 Unit')+f": {report.get('total_units',0)}"))
+        collection=summary.get('collection_validation',{})
+        if collection.get('enabled'):
+            label=QLabel(_('수집 검증 완료') if collection.get('complete') else _('수집 미완료 — 임시 결과입니다. 미완료 호기는 원인 후보이며 판정 호기로 확정된 것은 아닙니다.'))
+            label.setWordWrap(True);layout.addWidget(label)
         self.notice=QLabel(_('엑셀에 기록될 코드와 수량입니다. 170은 OT06으로 합산합니다. 원본 조회는 A PC에서 수행합니다.'))
         self.notice.setWordWrap(True);layout.addWidget(self.notice)
         top=QSplitter(Qt.Horizontal);top.setProperty('dmt_presentation','report-code-tables')

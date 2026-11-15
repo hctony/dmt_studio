@@ -33,6 +33,7 @@ class ReportTrace:
         files=[p for paths in self.inputs.values() for p in paths]+self.ivs_json+([self.ski] if self.ski else [])
         self.versions={p:file_version(p) for p in files}
         self.bbt_sources={}
+        self.collection_validation={}
 
     def set_bbt_sources(self,sources):
         self.bbt_sources=sources
@@ -52,7 +53,8 @@ class ReportTrace:
                     'coords':[list(c) for c in sorted(coords,key=lambda c:(c[1],c[0]))]}
                 for (strip,code,process,reason),coords in sorted(self.groups.items())],
                 'strips':self.strips,'inputs':self.inputs,'ivs_json_paths':self.ivs_json,
-                'bbt_folder':self.bbt_folder,'bbt_sources':self.bbt_sources,'ski_path':self.ski,'file_versions':self.versions}
+                'bbt_folder':self.bbt_folder,'bbt_sources':self.bbt_sources,'ski_path':self.ski,'file_versions':self.versions,
+                'collection_validation':self.collection_validation}
 
 
 def matching_groups(trace,code):

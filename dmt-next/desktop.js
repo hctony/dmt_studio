@@ -5,7 +5,8 @@ const {installLifecycle}=require('./lifecycle');
 const {NetworkServer}=require('./network-server');
 const {Measurement}=require('./measurement');
 const {Diagnostics,watchWindow}=require('./diagnostics');
-let win,gui,lifecycle,network,measurement,clientWindow;
+const {startCollector}=require('./collector-service');
+let win,gui,lifecycle,network,measurement,clientWindow,collector;
 const privateValues=[];
 const diagnostics=new Diagnostics(app.getPath('userData'),()=>[...privateValues,process.env.DMT_NAS_PASSWORD,...(network?.config.clients||[]).map(c=>c.token)].filter(Boolean));
 try{crashReporter.start({uploadToServer:false});}catch(error){diagnostics.write('crash-reporter-unavailable',{error:error.message});}
@@ -39,13 +40,16 @@ async function onEvent(m){
 app.whenReady().then(async()=>{
   if(!primaryInstance)return;
   await fs.mkdir(app.getPath('userData'),{recursive:true});
+  try{collector=await startCollector(app,diagnostics);}catch(error){diagnostics.write('collector-start-failed',{error:error.message});}
+  app.on('will-quit',()=>collector?.close());
+  if(process.env.DMT_COLLECTOR_TOKEN)privateValues.push(process.env.DMT_COLLECTOR_TOKEN);
   try{recentPaths=JSON.parse(await fs.readFile(path.join(app.getPath('userData'),'dialog-paths.json'),'utf8'));}catch{}
   try{for(const line of (await fs.readFile(path.join(app.getPath('userData'),'.env'),'utf8')).split(/\r?\n/))if(line.startsWith('DMT_NAS_PASSWORD='))privateValues.push(line.slice(line.indexOf('=')+1).trim().replace(/^['"]|['"]$/g,''));}catch{}
   gui=new GuiClient(onEvent,{diagnostics,label:'A'});
   measurement=new Measurement(app.getPath('userData'));
   network=new NetworkServer({root:app.getPath('userData'),uiDir:path.join(__dirname,'ui'),createClient:(event,options)=>new GuiClient(event,{...options,diagnostics,label:path.basename(options.dataDir)}),seed:()=>gui.call('gui.export-settings'),local:gui,measurement,diagnostics,version:app.getVersion()});
   await network.initialize();
-  const allBusy=()=>gui.busy||gui.pending.size>0||network.busy;
+  const allBusy=()=>gui.busy||gui.pending.size>0||network.busy||collector?.busy;
   ipcMain.handle('network:status',()=>network.status());
   ipcMain.handle('network:configure',(_e,args)=>network.configure(args));
   ipcMain.handle('network:start',()=>network.start());
@@ -112,13 +116,13 @@ app.whenReady().then(async()=>{
   });
   installUpdater(app,ipcMain,allBusy,{
     onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('update:state',state);},
-    beforeInstall:async()=>{await network.stop(false);await gui.stopForUpdate();},
+    beforeInstall:async()=>{await collector?.drain();await network.stop(false);await gui.stopForUpdate();},
     onInstallError:()=>{gui.updating=false;if(network.config.enabled&&!network.server)network.start().catch(e=>network.startupError=e.message);}
   });
   win=new BrowserWindow({width:1500,height:1000,minWidth:900,minHeight:650,backgroundColor:'#f3f6fb',title:'DMT Analysis Studio',webPreferences:{preload:path.join(__dirname,'desktop-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:!app.isPackaged&&process.env.DMT_HEADLESS==='1'}});
   watchWindow(win,'local',diagnostics);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  const lifecycleGui={get busy(){return gui.busy||network.busy;},get pending(){return gui.pending;},close(){network.close();measurement.close();gui.close();}};
+  const lifecycleGui={get busy(){return gui.busy||network.busy||collector?.busy;},get pending(){return gui.pending;},close(){network.close();measurement.close();gui.close();}};
   lifecycle=installLifecycle({app,win,gui:lifecycleGui,iconPath:path.join(__dirname,'assets','tray.ico')});
   Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'모드 / 模式',submenu:[{label:'로컬 / 서버 관리 · 本機 / 伺服器管理',click:()=>lifecycle.show()},{label:'클라이언트 창 · 用戶端視窗',click:()=>clientWindow?.show()}]}]));
   win.webContents.on('will-navigate',event=>event.preventDefault());

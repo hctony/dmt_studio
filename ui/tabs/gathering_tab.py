@@ -420,10 +420,15 @@ class GatheringModePage(QWidget):
         self.btn_export.setEnabled(True)
         self.output_text = output
         self.summary = summary
+        collection=summary.get('collection') or {}
+        incomplete=bool(collection) and not collection.get('complete')
+        self.btn_export.setEnabled(not incomplete)
+        self.source_history={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
         if getattr(self, 'run_context', None) and not getattr(self.worker, '_stop', False):
             from core.yield_handoff import remember
             context = self.run_context
             context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
+            context['collection_receipt']=collection.get('receipt')
             remember(context['model'], context['lot'], kind=self.mode, output=output, config=context)
         warning_text = self.format_parent_warnings(summary.get("parent_warnings", []))
         cache = summary.get("cache", {})
@@ -439,6 +444,12 @@ class GatheringModePage(QWidget):
             + output[:20000]
         )
         self.refresh_summary(summary)
+        if collection:
+            from core.collection import format_report
+            self.result.append('\n'+format_report({'complete':collection.get('complete'),'reports':[collection]}))
+        if incomplete:
+            self.result.setPlainText(_('수집 미완료 — 임시 결과입니다. 성적서와 공식 TXT 저장은 차단됩니다.')+'\n'+self.result.toPlainText())
+            QMessageBox.warning(self,_('수집 검증 미완료'),_('미완료 호기를 확인한 뒤 다시 수집하세요. 정상 호기의 원본과 인덱스는 재사용됩니다.'))
 
     def apply_duplicate_choices(
         self,
@@ -520,6 +531,17 @@ class GatheringModePage(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(str(xout_count)))
             self.summary_table.setItem(row, 1, QTableWidgetItem(str(strip_count)))
         self.summary_table.resizeColumnsToContents()
+        collection=summary.get('collection')
+        if collection:
+            headers=[_('호기/경로'),_('상태'),_('발견'),_('처리 완료'),_('실패'),_('캐시 재사용'),_('LOT Strip'),_('마지막 정상 수집 (UTC)')]
+            self.status_table.setColumnCount(len(headers));self.status_table.setHorizontalHeaderLabels(headers)
+            hosts=collection['hosts'];self.status_table.setRowCount(len(hosts))
+            for row,host in enumerate(hosts):
+                label=_('수집 미완료') if host['state']!='complete' else _('정상 수집') if host.get('matched_strips') else _('검색 완료 · LOT 기록 없음')
+                values=[host['path'],label,host.get('found',0),host.get('processed',0),len(host.get('errors') or [])+len(host.get('parse_errors') or []),host.get('reused',0),host.get('matched_strips',0),host.get('last_successful_at','')]
+                for column,value in enumerate(values):self.status_table.setItem(row,column,QTableWidgetItem(str(value)))
+            self.status_table.resizeColumnsToContents();return
+        self.status_table.setColumnCount(4);self.status_table.setHorizontalHeaderLabels([_('경로'),_('상태'),_('TXT 수'),_('매칭 Strip')])
 
         status_rows = summary.get("status", [])
         self.status_table.setRowCount(len(status_rows))
@@ -536,6 +558,8 @@ class GatheringModePage(QWidget):
         QMessageBox.critical(self, f"{self.mode} 집계 실패", message)
 
     def export_txt(self) -> None:
+        if self.summary.get('collection') and not self.summary['collection'].get('complete'):
+            QMessageBox.warning(self,_('수집 검증 미완료'),_('미완료 호기를 다시 수집한 뒤 저장하세요.'));return
         if not self.output_text:
             QMessageBox.warning(self, _("대상 없음"), _("먼저 집계를 실행하세요."))
             return
@@ -548,7 +572,8 @@ class GatheringModePage(QWidget):
         )
         if not path:
             return
-        Path(path).write_text(self.output_text, encoding="utf-8")
+        from core.collection import write_export
+        write_export(path,self.output_text,getattr(self,'source_history',{}),(self.summary.get('collection') or {}).get('receipt'))
         QMessageBox.information(self, _("저장 완료"), path)
 
     def log(self, message: str) -> None:
@@ -594,6 +619,7 @@ class GatheringTab(QWidget):
         index = self.search_period.findData(int(APP_SETTINGS.value('gathering/lookback_days',30)))
         self.search_period.setCurrentIndex(max(0,index))
         self.search_period.currentIndexChanged.connect(lambda: APP_SETTINGS.setValue('gathering/lookback_days',self.search_period.currentData()))
+        self.force_recollect=QCheckBox(_('원본 강제 재수집 (내용 다시 확인)'))
         browse_json = QPushButton(_("JSON 선택"))
         browse_json.clicked.connect(self.choose_exclude_json)
         json_row = QHBoxLayout()
@@ -621,6 +647,7 @@ class GatheringTab(QWidget):
         form.addRow(_("모델명"), self.model_in)
         form.addRow("LOT", lot_row)
         form.addRow(_("검색 기간"), self.search_period)
+        form.addRow(self.force_recollect)
         form.addRow(_("X 좌표 수"), self.x_count_in)
         form.addRow(_("Y 좌표 수"), self.y_count_in)
         form.addRow(_("허용수"), self.allowance_in)
@@ -786,8 +813,18 @@ class GatheringTab(QWidget):
             return
         context = self.batch_run_context
         lot = context['lot']
+        collection=summary.get('collection') or {}
+        context['collection_receipt']=collection.get('receipt')
+        context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
+        if collection and not collection.get('complete'):
+            from core.yield_handoff import remember
+            remember(context['model'],lot,kind=mode,output=output,config=context)
+            self._on_batch_failed(_('수집 미완료 — 임시 결과만 보관하고 일괄 추출을 중단했습니다.'))
+            self.batch_dialog.btn_close.setEnabled(True)
+            return
         out_file = self.batch_out_dir / f"Gather_{mode}_{lot}.txt"
-        out_file.write_text(output, encoding="utf-8")
+        from core.collection import write_export
+        write_export(out_file,output,context['source_history'],collection.get('receipt'))
         if not getattr(self.batch_worker, '_stop', False):
             from core.yield_handoff import remember
             context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
@@ -857,6 +894,7 @@ class GatheringTab(QWidget):
         save_line_edit(self.ski_in, "gathering/ski")
         return {
             "lookback_days": int(self.search_period.currentData()),
+            "force_recollect": self.force_recollect.isChecked(),
             "model": self.model_in.text().strip(),
             "lot": lot,
             "x_count": x_count,

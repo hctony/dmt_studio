@@ -788,6 +788,8 @@ def calculate_yield_summary_by_process(
     input_versions={str(p):file_version(p) for p in watched_paths}
     ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins)
     from core.its_validation import load_history,validate_strip,source_metadata
+    from core.collection import reports_for_inputs
+    collection_validation=reports_for_inputs(list(vrs_paths)+list(fvi_paths)+list(ivs_paths or []),{'VRS':vrs_paths,'FVI':fvi_paths,'IVS':ivs_paths or []})
     its_history=load_history(ivs_json_paths or [])
     retired_ivs={}
     for strip,epoch in its_history.items():
@@ -803,6 +805,7 @@ def calculate_yield_summary_by_process(
     }
     from core.report_trace import ReportTrace
     report_trace = ReportTrace(process_inputs, ivs_json_paths or [], skipdata_path, ski_path)
+    report_trace.collection_validation=collection_validation
     report_trace.set_bbt_sources(bbt_sources)
     process_blocks: dict[str, dict[str, GatherStrip]] = {}
     process_replaced: dict[str, int] = {}
@@ -831,6 +834,8 @@ def calculate_yield_summary_by_process(
         [block for blocks in process_blocks.values() for block in blocks.values()],
         json_lot_id,
     )
+    if any(str(r.get('lot','')).strip().upper()!=lot_id.upper() for r in collection_validation.get('reports',[])):
+        collection_validation['complete']=False;collection_validation['errors'].append('COLLECTION_LOT_MISMATCH')
     validation = build_strip_json_validation(strip_json_ids, observed_strip_ids, lot_id)
 
     total_units = production_units(len(expected_strip_ids), units_per_strip)
@@ -863,6 +868,8 @@ def calculate_yield_summary_by_process(
 
     for strip_id in sorted(expected_strip_ids):
         bbt_coords = set(bbt_map.get(strip_id, set()))
+        for rpt in bbt_sources.get(strip_id,[]):
+            input_versions.setdefault(rpt,report_trace.versions.get(rpt))
         present_processes = [process for process, blocks in process_blocks.items() if strip_id in blocks]
         for process, blocks in process_blocks.items():
             if strip_id not in blocks:
@@ -1151,6 +1158,8 @@ def calculate_yield_summary_by_process(
 
     table_bbt_units = sum(int(row.get("bbt_count", 0)) for row in per_strip_rows)
     if any(file_version(path)!=version for path,version in input_versions.items()):
+        if collection_validation.get('enabled'):
+            collection_validation['complete']=False;collection_validation['errors'].append('INPUT_CHANGED_DURING_CALCULATION')
         for audit in its_audits:
             audit.update(status='HISTORY_UNVERIFIED',auto_pass=False,input_changed_during_calculation=True)
     table_bbt_strip_count = sum(1 for row in per_strip_rows if int(row.get("bbt_count", 0)) > 0)
@@ -1259,6 +1268,7 @@ def calculate_yield_summary_by_process(
         "process_code_distribution": process_code_distribution,
         "report_code_distribution": report_code_distribution,
         "report_trace": report_trace.snapshot(),
+        "collection_validation": collection_validation,
         "its_validation": {'enabled':bool(its_history),'strips':its_audits,'auto_pass':bool(its_audits) and all(a['auto_pass'] for a in its_audits) and set(expected_strip_ids).issubset(its_history),
             'untracked_strips':sorted(set(expected_strip_ids)-set(its_history)) if its_history else []},
         "report_process_code_distribution": report_process_code_distribution,

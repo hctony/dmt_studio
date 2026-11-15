@@ -20,6 +20,7 @@ from core.gather import (
 )
 from core.skipdata import load_skipdata_folder, load_ski_file
 from core.utils import lot_from_strip_id
+from core.cancellation import OperationCancelled
 
 
 def _setting_text(key: str, default: str = "") -> str:
@@ -49,6 +50,7 @@ class GatheringWorker(QThread):
         skipdata_path: str = "",
         ski_path: str = "",
         lookback_days: int = 30,
+        force_recollect: bool = False,
     ):
         super().__init__()
         self.mode = mode
@@ -65,6 +67,7 @@ class GatheringWorker(QThread):
         self.skipdata_path = skipdata_path
         self.ski_path = ski_path
         self.lookback_days = min(30, max(1, int(lookback_days or 30)))
+        self.force_recollect=bool(force_recollect)
         self._stop = False
         import threading
         self.rework_event = threading.Event()
@@ -98,48 +101,64 @@ class GatheringWorker(QThread):
 
             parsed_by_path: dict[Path, list[tuple[Path, GatherStrip]]] = {}
 
-            for index, path in enumerate(paths, start=1):
-                if self._stop:
-                    break
-                if not path.exists():
-                    self.progress.emit(f"[SKIP] 경로 없음: {path}")
-                    status.append({"path": str(path), "status": _("경로 없음"), "txt_files": 0, "matched_strips": 0})
-                    continue
-                self.progress.emit(f"[{index}/{len(paths)}] {path} TXT 검색")
-                txt_files = cached_txt_files(path, self.lookback_days, search_stats)
-                txt_counts[path] = len(txt_files)
-                direct_parent_hits = find_parent_gather_hits(path, self.lot, direct_only=True, lookback_days=self.lookback_days, stats=search_stats)
-                if direct_parent_hits:
-                    parent_warnings.append({"path": str(path), "parent_hits": direct_parent_hits, "scope": _("1단계 상위 폴더")})
-                    self.progress.emit(f"[게더링 누락 점검] 1단계 상위 폴더 TXT에서 LOT 데이터 발견: {path.parent}")
-                    for hit in direct_parent_hits[:5]:
-                        self.progress.emit(f"  - {hit}")
-                if not txt_files:
-                    hits = direct_parent_hits or find_parent_gather_hits(path, self.lot, lookback_days=self.lookback_days, stats=search_stats)
-                    if hits:
-                        if not direct_parent_hits:
-                            parent_warnings.append({"path": str(path), "parent_hits": hits, "scope": _("상위 경로")})
-                        self.progress.emit(f"[게더링 확인] 지정 경로에는 TXT 없음, 상위 경로에서 LOT 데이터 발견: {path}")
-                        for hit in hits[:5]:
-                            self.progress.emit(f"  - {hit}")
-                    else:
-                        self.progress.emit(f"[NO DATA] TXT 없음: {path}")
-                    status.append({"path": str(path), "status": _("TXT 없음"), "txt_files": 0, "matched_strips": 0})
-                    continue
-
-                parsed_for_path = []
-                for txt_file in txt_files:
+            from core.collection import enabled as collection_enabled,collect
+            collection_report=None
+            if collection_enabled():
+                def native_progress(message):
+                    self.dmt_progress={'stage':'LOT 인덱스 검증' if message.startswith('[INDEX]') else '호기 수집 및 검증','value':0,'max':0,'detail':message}
+                    self.progress.emit(message)
+                parsed_by_path,collection_report=collect(paths,self.lookback_days,self.lot,self.mode,lambda:self._stop,native_progress,force=self.force_recollect)
+                if self._stop:return
+                for host in collection_report['hosts']:
+                    path=Path(host['path']);txt_counts[path]=host.get('found',0)
+                    if host['state']!='complete' or not host.get('matched_strips'):
+                        status.append({'path':str(path),'status':'수집 미완료' if host['state']!='complete' else '검색 완료 · LOT 기록 없음',
+                                       'txt_files':host.get('found',0),'matched_strips':host.get('matched_strips',0)})
+                search_stats={'disk_hits':sum(h.get('reused',0) for h in collection_report['hosts']),
+                              'remote_reads':sum(h.get('found',0)-h.get('reused',0) for h in collection_report['hosts'])}
+            else:
+                for index, path in enumerate(paths, start=1):
                     if self._stop:
                         break
-                    try:
-                        parsed = parse_gather_file(txt_file, self.lot, search_stats)
-                    except Exception as exc:
-                        self.progress.emit(f"파싱 실패: {txt_file} ({exc})")
+                    if not path.exists():
+                        self.progress.emit(f"[SKIP] 경로 없음: {path}")
+                        status.append({"path": str(path), "status": _("경로 없음"), "txt_files": 0, "matched_strips": 0})
                         continue
-                    for strip_id, item in parsed.items():
-                        parsed_for_path.append((txt_file, clone_gather_strip(item)))
-                parsed_by_path[path] = parsed_for_path
-                self.progress.emit(f"[CACHE] 메모리 재사용 {search_stats.get('memory_hits',0)} / 디스크 재사용 {search_stats.get('disk_hits',0)} / 새로 읽음 {search_stats.get('remote_reads',0)} / 기간 제외 {search_stats.get('old_skipped',0)}")
+                    self.progress.emit(f"[{index}/{len(paths)}] {path} TXT 검색")
+                    txt_files = cached_txt_files(path, self.lookback_days, search_stats)
+                    txt_counts[path] = len(txt_files)
+                    direct_parent_hits = find_parent_gather_hits(path, self.lot, direct_only=True, lookback_days=self.lookback_days, stats=search_stats)
+                    if direct_parent_hits:
+                        parent_warnings.append({"path": str(path), "parent_hits": direct_parent_hits, "scope": _("1단계 상위 폴더")})
+                        self.progress.emit(f"[게더링 누락 점검] 1단계 상위 폴더 TXT에서 LOT 데이터 발견: {path.parent}")
+                        for hit in direct_parent_hits[:5]:
+                            self.progress.emit(f"  - {hit}")
+                    if not txt_files:
+                        hits = direct_parent_hits or find_parent_gather_hits(path, self.lot, lookback_days=self.lookback_days, stats=search_stats)
+                        if hits:
+                            if not direct_parent_hits:
+                                parent_warnings.append({"path": str(path), "parent_hits": hits, "scope": _("상위 경로")})
+                            self.progress.emit(f"[게더링 확인] 지정 경로에는 TXT 없음, 상위 경로에서 LOT 데이터 발견: {path}")
+                            for hit in hits[:5]:
+                                self.progress.emit(f"  - {hit}")
+                        else:
+                            self.progress.emit(f"[NO DATA] TXT 없음: {path}")
+                        status.append({"path": str(path), "status": _("TXT 없음"), "txt_files": 0, "matched_strips": 0})
+                        continue
+
+                    parsed_for_path = []
+                    for txt_file in txt_files:
+                        if self._stop:
+                            break
+                        try:
+                            parsed = parse_gather_file(txt_file, self.lot, search_stats)
+                        except Exception as exc:
+                            self.progress.emit(f"파싱 실패: {txt_file} ({exc})")
+                            continue
+                        for strip_id, item in parsed.items():
+                            parsed_for_path.append((txt_file, clone_gather_strip(item)))
+                    parsed_by_path[path] = parsed_for_path
+                    self.progress.emit(f"[CACHE] 메모리 재사용 {search_stats.get('memory_hits',0)} / 디스크 재사용 {search_stats.get('disk_hits',0)} / 새로 읽음 {search_stats.get('remote_reads',0)} / 기간 제외 {search_stats.get('old_skipped',0)}")
 
             # 날짜 비교를 위한 파싱된 모든 아이템 수집
             all_items = [item for items in parsed_by_path.values() for _, item in items]
@@ -242,6 +261,7 @@ class GatheringWorker(QThread):
                 "smart_replaced_count": smart_replaced_count,
                 "xout_distribution": dict(sorted(xout_counter.items())),
                 "status": status,
+                "collection": collection_report,
                 "parent_warnings": parent_warnings,
                 "duplicate_conflicts": duplicate_conflicts,
                 "cache": {
@@ -251,6 +271,8 @@ class GatheringWorker(QThread):
                 },
             }
             self.finished.emit(final, output, summary)
+        except OperationCancelled:
+            self.progress.emit(_('수집 중지가 완료되었습니다.'))
         except Exception:
             self.failed.emit(traceback.format_exc())
 
@@ -372,8 +394,21 @@ class StripGatherSearchThread(QThread):
             for mode in ("IVS", "VRS", "FVI"):
                 paths = self.build_paths(mode)
                 self.progress.emit(f"[{mode}] {len(paths)}개 경로 검색")
-                for path in paths:
-                    all_results.extend(self.scan_path(mode, path))
+                from core.collection import enabled,collect
+                if enabled():
+                    parsed,report=collect(paths,30,lot_from_strip_id(self.strip_id),mode,lambda:False,self.progress.emit)
+                    for host in report['hosts']:
+                        if host['state']!='complete':
+                            messages=list(host.get('errors') or [])+[f"{e['path']}: {e['error']}" for e in host.get('parse_errors',[])]
+                            all_results.append({'mode':mode,'scope':_('호기별 수집 검증'),'path':host['path'],'error':'\n'.join(messages) or _('수집 미완료')})
+                    for items in parsed.values():
+                        for source,block in items:
+                            if block.strip_id.upper()!=self.strip_id:continue
+                            all_results.append({'mode':mode,'scope':_('최근 30일 · 검증 원본'),'path':str(source),'strip_id':self.strip_id,
+                                'defect_line_count':len(block.defect_lines),'coord_count':len(gather_line_coords(block.defect_lines)),
+                                'codes':{code:len(coords) for code,coords in sorted(coords_by_code(block.defect_lines).items())},'defect_lines':block.defect_lines[:200]})
+                else:
+                    for path in paths:all_results.extend(self.scan_path(mode, path))
             self.finished.emit(all_results)
         except Exception:
             self.failed.emit(traceback.format_exc())
