@@ -1,5 +1,7 @@
 # DMT Analysis Studio
 
+0.4.9의 [성적서 검증·OT14 제외·미분류 코드 검토](REPORT-REVIEW.md)를 참고하세요.
+
 0.4.8의 [Go 중앙 수집·호기별 완전성 검증·원본 이력](COLLECTION-SERVICE.md)을 참고하세요.
 
 0.2.0부터 모든 원본 탭의 작업 흐름은 Electron 화면으로 연결됩니다.

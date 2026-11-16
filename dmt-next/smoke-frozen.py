@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory() as data:
         for widget,value in zip(inputs,['M',str(txt),'','',str(ivs),'','','',str(ski),'4','3']):
             rpc('gui.action',id=widget['id'],action='input',value=value)
         buttons={w['text']:w for w in walk(rpc('gui.snapshot')['root']) if w['type']=='button'}
-        rpc('gui.action',id=buttons['수율 계산']['id'],action='click')
+        rpc('gui.action',id=buttons['수율 계산']['id'],action='click',on_dialog=lambda d:1024)
         rpc('gui.action',id=buttons['코드 미리보기']['id'],action='click')
         state=rpc('gui.snapshot');dialog=state['dialogs'][0]
         table=next(w for w in walk(dialog['content']) if w['type']=='table' and w['headers'][0]=='성적서 코드')

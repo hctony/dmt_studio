@@ -41,6 +41,14 @@ def export_report_to_2xlsx(
       ok_unit_aggregation.ok_unit_percent,
       final_defects_by_code_including_bbt: {code: {count, ...}}
     """
+    from core.report_review import UNRESOLVED
+    from core.report_codes import ordered_report_codes
+    pending={code:count for code,count in ordered_report_codes(report) if code.upper() in UNRESOLVED}
+    if report.get('mismatch_count',0) or pending or report.get('policy_errors'):
+        return {'success':False,'error':_('불일치만 결과가 0개이고 미분류 코드가 없어야 생성할 수 있습니다. 코드 미리보기에서 검토·분류하세요.')+'\n'+str(pending)}
+    from core.report_trace import file_version
+    def changed():return any(file_version(p)!=version for p,version in report.get('source_versions',{}).items())
+    if changed():return {'success':False,'error':_('계산 후 원본이 변경되었습니다. 수율을 다시 계산하세요.')}
     try:
         from openpyxl import load_workbook, Workbook
         from openpyxl.styles import Alignment, PatternFill, Font
@@ -67,7 +75,7 @@ def export_report_to_2xlsx(
 
         # ── 공통: 불량 코드 정렬 ─────────────────────────────────────────────
         from core.report_codes import ordered_report_codes
-        ordered_defects = ordered_report_codes(report)
+        ordered_defects = [(code,count) for code,count in ordered_report_codes(report) if code.upper()!='OT14']
 
         DEFECT_START_COL = 10  # J 열 (1-based)
 
@@ -200,8 +208,28 @@ def export_report_to_2xlsx(
                 high_rate.append(f"{code} {pct}%")
         ws["H7"] = ", ".join(high_rate) if high_rate else _("없음")
 
+        # Separate verification cells: OT14 never becomes a defect column.
+        for label_cell,value_cell,label,value in (
+            ('G8','H8',_('OT14 제외 수량'),int(report.get('ot14_excluded_units',0))),
+            ('G9','H9',_('원본 총 Unit'),int(report.get('gross_total_units',total_units))),
+            ('G10','H10',_('원본 불량 Unit'),int(report.get('gross_defective_units',ng_units))),
+            ('G11','H11',_('불일치 Strip 수'),int(report.get('mismatch_count',0))),
+        ):
+            ws[label_cell]=label;ws[value_cell]=value
+            ws[label_cell].font=Font(bold=True);ws[value_cell].number_format='#,##0'
+        decisions=report.get('classifications',[])
+        if decisions:
+            review=wb.create_sheet(_('분류 이력'))
+            review.append(['StripID','X','Y',_('원본 코드'),_('분류 코드'),_('분류 사유'),'UTC'])
+            for d in decisions:
+                review.append([d['strip_id'],d['x'],d['y'],d['from_code'],d['to_code'],d['note'],d['at']])
+                for cell in review[review.max_row]:
+                    if isinstance(cell.value,str):cell.data_type='s'
+            review.freeze_panes='A2';review.auto_filter.ref=review.dimensions;_autofit_columns(review)
+
         if not use_template:
             _autofit_columns(ws)
+        if changed():return {'success':False,'error':_('계산 후 원본이 변경되었습니다. 수율을 다시 계산하세요.')}
         wb.save(output_path)
 
         return {

@@ -511,7 +511,7 @@ def calculate_yield_summary(
     return calculate_yield_summary_many([txt_path], strip_json_path, units_per_strip, xout_limit, skipdata_path)
 
 
-def calculate_yield_summary_many(
+def _calculate_yield_summary_many(
     txt_paths: list[Path],
     strip_json_path: Path | None,
     units_per_strip: int,
@@ -523,6 +523,9 @@ def calculate_yield_summary_many(
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     skipdata = load_skipdata_folder(skipdata_path)
     ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
+    from core.report_trace import ReportTrace
+    legacy_trace=ReportTrace({'VRS':txt_paths},[],skipdata_path,ski_path)
+    legacy_sources={};load_skipdata_folder(skipdata_path,legacy_sources);legacy_trace.set_bbt_sources(legacy_sources)
     blocks: dict[str, YieldStripBlock] = {}
     vrs_fvi_merged_strips: set[str] = set()
     for txt_path in txt_paths:
@@ -612,8 +615,24 @@ def calculate_yield_summary_many(
             defective_units += units_per_strip
         else:
             good_strip_ids.append(strip_id)
-            defective_units += ski_defects
+            defective_units += min(units_per_strip,ski_defects+len(set(skipdata.get(strip_id,set()))-set(ski_map.get(strip_id,set())))) if ski_map else ski_defects
             good_strip_defective_units += ski_defects
+        bbt_coords=set(skipdata.get(strip_id,set()))
+        ski_coords=set(ski_map.get(strip_id,set()))
+        width=infer_x_count_for_strip(units_per_strip,[bbt_coords,ski_coords,block_coords])
+        targets=set(ski_coords) if ski_coords else block_coords|bbt_coords
+        if is_scrap:targets=full_unit_coords(width,units_per_strip//width) if width else targets
+        targets.update(bbt_coords)
+        codes={parse_xy_from_gather_line(line):parse_gather_code(line) for line in (block.defect_lines if block else [])}
+        legacy_trace.strips[strip_id]={'x_count':width,'units_per_strip':units_per_strip,'is_scrap':is_scrap,
+            'ski_coords':[list(c) for c in sorted(ski_coords)],'bbt_coords':[list(c) for c in sorted(bbt_coords)],
+            'processes':{'VRS':{'defect_lines':block.defect_lines if block else [],'sources':sorted(block.source_files) if block else []}},'ivs_records':[]}
+        for coord in targets:
+            if coord in bbt_coords:code,process,reason='OT14','BBT','bbt'
+            elif is_ivs_dummy_scrap:code,process,reason='SM03_DUMMY9999','IVS','dummy9999'
+            else:
+                code=codes.get(coord,'170' if is_scrap else 'UNKNOWN');process='VRS';reason='gather' if coord in codes else 'xout_fill' if is_scrap else 'ski_unassigned'
+            legacy_trace.add(strip_id,code,process,coord,reason)
         per_strip_rows.append(
             {
                 "strip_id": strip_id,
@@ -667,6 +686,7 @@ def calculate_yield_summary_many(
         "merged_strip_count": len(vrs_fvi_merged_strips),
         "clean_txt_strip_count": len(clean_txt_strips),
         "clean_txt_strips": clean_txt_strips,
+        "report_trace":legacy_trace.snapshot(),
         "txt_only_strips": txt_only_strips,
         "missing_strips": missing_strips,
         "strip_json_validation": validation,
@@ -678,6 +698,11 @@ def calculate_yield_summary_many(
         "bbt_full_unit_summary": build_bbt_full_unit_summary(skipdata, units_per_strip, lot_id),
         "bbt_validation": build_bbt_validation(skipdata, expected_strip_ids, gather_coords_by_strip, ski_map, units_per_strip, xout_limit),
     }
+
+def calculate_yield_summary_many(*args, **kwargs):
+    from core.report_review import prepare_summary
+    return prepare_summary(_calculate_yield_summary_many(*args, **kwargs))
+
 
 def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
     total_units = int(summary.get("total_units", 0) or 0)
@@ -763,7 +788,7 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
     }
 
 
-def calculate_yield_summary_by_process(
+def _calculate_yield_summary_by_process(
     vrs_paths: list[Path],
     fvi_paths: list[Path],
     ivs_paths: list[Path] | None,
@@ -1287,7 +1312,14 @@ def calculate_yield_summary_by_process(
     }
 
 
+def calculate_yield_summary_by_process(*args, **kwargs):
+    from core.report_review import prepare_summary
+    return prepare_summary(_calculate_yield_summary_by_process(*args, **kwargs))
+
+
 def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
+    from core.report_review import prepare_summary,mismatch_rows,unresolved_counts
+    prepare_summary(summary)
     total_units = int(summary.get("total_units", 0) or 0)
     ok_units = int(summary.get("good_units", 0) or 0)
     ng_units = int(summary.get("defective_units", 0) or 0)
@@ -1341,7 +1373,7 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
         }
         for code, row in sorted(by_code.items())
     }
-    final_by_code = dict(sorted(final_by_code.items()))
+    final_by_code = dict(sorted((code,row) for code,row in final_by_code.items() if code.upper()!='OT14'))
     ok_unit_rows = {
         str(row.get("strip_id", "")): int(row.get("good_units", 0) or 0)
         for row in summary.get("per_strip_rows", [])
@@ -1349,6 +1381,14 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
     }
     return {
         "model_name": model_name,
+        "ot14_excluded_units": summary.get('ot14_excluded_units',0),
+        "gross_total_units": summary.get('gross_total_units',total_units),
+        "gross_defective_units": summary.get('gross_defective_units',ng_units),
+        "mismatch_count": len(mismatch_rows(summary)),
+        "unresolved_codes": unresolved_counts(summary),
+        "classifications": summary.get('report_trace',{}).get('classifications',[]),
+        "source_versions": summary.get('report_trace',{}).get('file_versions',{}),
+        "policy_errors": summary.get('report_policy_errors',[]),
         "lot_id": summary.get("lot_id", ""),
         "total_units": total_units,
         "ok_units": ok_units,

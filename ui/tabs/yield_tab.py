@@ -472,6 +472,10 @@ class YieldTab(QWidget):
             return
         self._report_input_snapshot = self.report_input_values()
         self.refresh_result()
+        from core.report_review import unresolved_counts
+        pending=unresolved_counts(self.summary)
+        if pending:
+            QMessageBox.critical(self,_('미분류 불량 코드'),_('9999, UNKNOWN, 1111은 검토·분류가 필요합니다. 코드 미리보기에서 원본을 확인하고 분류하세요.')+'\n'+', '.join(f'{c}: {n}' for c,n in pending.items()))
         audit=self.summary.get('its_validation',{})
         if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
             from core.its_validation import format_audits
@@ -675,6 +679,11 @@ class YieldTab(QWidget):
     def export_excel(self) -> None:
         if not self.report_ready():
             return
+        from core.report_review import export_issues
+        issues=export_issues(self.summary)
+        if issues:
+            QMessageBox.critical(self,_('성적서 생성 차단'),_('불일치만 결과가 0개이고 미분류 코드가 없어야 생성할 수 있습니다. 코드 미리보기에서 검토·분류하세요.')+'\n'+'\n'.join(issues))
+            return
         collection=self.summary.get('collection_validation',{})
         if collection.get('enabled') and (not collection.get('complete') or self.summary.get('report_code_distribution',{}).get('UNKNOWN',0)):
             QMessageBox.warning(self,_('수집 검증 미완료'),_('미완료 호기 또는 UNKNOWN 좌표를 확인하고 다시 수집·계산하세요. 성적서는 저장하지 않았습니다.'))
@@ -732,6 +741,7 @@ class YieldTab(QWidget):
         summary = self.summary
         if summary.get("mode") == "process":
             self.refresh_process_result(summary)
+            self.result.append('\n'+_('OT14 제외: 총 Unit과 불량 Unit에서 차감, 원본 좌표 검증은 유지')+f"\nOT14: {summary.get('ot14_excluded_units',0)} / "+_('원본 총 Unit')+f": {summary.get('gross_total_units',0)}")
             collection=summary.get('collection_validation',{})
             if collection.get('enabled'):
                 from core.collection import format_report
@@ -818,10 +828,8 @@ class YieldTab(QWidget):
     def filtered_strip_rows(self, rows: list[dict], xout_key: str) -> list[dict]:
         if not hasattr(self, "radio_table_mismatch") or not self.radio_table_mismatch.isChecked():
             return rows
-        return [
-            item for item in rows
-            if int(item.get(xout_key, 0)) != int(item.get("ski_xout_count", 0))
-        ]
+        from core.report_review import mismatch_rows
+        return mismatch_rows({'mode':'process' if xout_key=='final_xout' else 'legacy','per_strip_rows':rows})
 
     def mark_table_row_if_mismatch(self, row: int, xout: int, ski: int, column_count: int) -> None:
         if xout == ski:

@@ -27,3 +27,4 @@ yield_model_settings.json
 !collector/go.mod
 **/collection-index.sqlite*
 **/collection-runs/
+**/report-reviews/

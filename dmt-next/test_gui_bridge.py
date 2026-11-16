@@ -472,6 +472,37 @@ class GuiTests(unittest.TestCase):
         self.answers['save']=str(self.root/'forbidden.txt');page.export_txt()
         self.assertFalse((self.root/'forbidden.txt').exists())
 
+    def test_report_mismatch_guard_ignores_radio_filter_and_review_allows_export(self):
+        from core.report_review import mismatch_rows
+        txt,ids=self.fixture();txt.write_text(txt.read_text().replace('SM03','1111'))
+        ski=self.root/'final.ski';ski.write_text('RX1234-01,1,1\n')
+        tab=self.tab(6)
+        for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):getattr(tab,field).clear()
+        tab.vrs_txt_in.setText(str(txt));tab.strip_json_in.setText(str(ids));tab.ski_in.setText(str(ski));tab.units_per_strip_in.setText('4');tab.xout_limit_in.setText('3')
+        target=self.root/'report.xlsx';self.answers['save']=str(target)
+        with patch('core.report_review.DATA_DIR',self.root):
+            self.action(tab.btn_calc,'click')
+            self.assertTrue(any('9999, UNKNOWN, 1111' in d.get('text','') for k,d in self.dialogs if k=='message'))
+            self.action(tab.btn_export_excel,'click');self.assertFalse(target.exists())
+            self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
+            try:
+                self.action(dialog.review_code,'input','SM03');self.action(dialog.review_note,'input','Checked original XML')
+                dialog.unit_table.selectRow(0);self.action(dialog.classify_selected,'click')
+                self.assertEqual(tab.summary['report_code_distribution'],{'SM03':1})
+            finally:
+                dialog.reject()
+                for worker in list(getattr(dialog,'_live_workers',())):worker.stop();worker.wait(2000)
+            # The export uses precisely the same row predicate as the filter.
+            tab.summary['per_strip_rows'][0]['final_xout']=2
+            self.assertEqual(len(mismatch_rows(tab.summary)),1)
+            self.assertFalse(tab.radio_table_mismatch.isChecked())
+            self.action(tab.btn_export_excel,'click');self.assertFalse(target.exists())
+            self.action(tab.radio_table_mismatch,'check',True)
+            self.assertEqual(tab.strip_table.rowCount(),2) # mismatch + sum
+            tab.summary['per_strip_rows'][0]['final_xout']=1;tab.refresh_result()
+            self.assertEqual(tab.strip_table.rowCount(),1) # sum only, zero mismatches
+            self.action(tab.btn_export_excel,'click');self.assertTrue(target.exists(),self.dialogs)
+
     def test_partial_collection_or_unknown_prevents_official_excel(self):
         tab=self.tab(6);self.answers['save']=str(self.root/'forbidden.xlsx')
         for complete,unknown in ((False,0),(True,1)):
@@ -480,6 +511,17 @@ class GuiTests(unittest.TestCase):
             self.action(tab.btn_export_excel,'click')
             self.assertFalse((self.root/'forbidden.xlsx').exists())
             self.assertIn('UNKNOWN',self.dialogs[-1][1]['text'])
+
+    def test_report_unit_table_supports_browser_ctrl_and_shift_selection(self):
+        table=W.QTableWidget(4,2,self.c.window);table.setProperty('dmt_multi_select',True)
+        table.setSelectionMode(W.QAbstractItemView.ExtendedSelection);table.setSelectionBehavior(W.QAbstractItemView.SelectRows)
+        for row in range(4):table.setItem(row,0,W.QTableWidgetItem(str(row)))
+        table.show();self.app.processEvents()
+        table.selectRow(0)
+        self.action(table,'table',row=1,column=0,ctrl=True)
+        self.assertEqual(sorted(self.c.widget(table)['selectedRows']),[0,1])
+        self.action(table,'table',row=3,column=0,shift=True)
+        self.assertEqual(sorted(self.c.widget(table)['selectedRows']),[1,2,3])
 
     def test_remote_revalidates_inherited_paths_and_locks_busy_inputs(self):
         tab=self.tab(6)

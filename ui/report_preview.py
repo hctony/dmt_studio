@@ -2,7 +2,7 @@
 from PySide6.QtCore import Qt,QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTableWidget,QTableWidgetItem,QAbstractItemView,
-    QPushButton,QGroupBox,QTextEdit,QSplitter,QComboBox)
+    QPushButton,QGroupBox,QTextEdit,QSplitter,QComboBox,QLineEdit,QMessageBox)
 from core.i18n import _
 from core.report_codes import ordered_report_codes
 from core.report_trace import trace_rows,matching_groups,REASONS
@@ -17,7 +17,7 @@ class ReportPreviewDialog(QDialog):
         self.setWindowTitle(_('성적서 코드 미리보기'));self.resize(1400,950)
         self.setProperty('dmt_presentation','report-code-preview')
         self.summary=summary;self.report=report;self.trace=summary.get('report_trace',{})
-        self.codes=ordered_report_codes(report);self.code='';self.offset=0;self.rows=[];self._selection=None
+        self.codes=self.report_codes(report);self.code='';self.offset=0;self.rows=[];self._selection=None
         self._generation=0;self._pending=None;self.worker=None;self._closed=False
         self.destroyed.connect(lambda:setattr(self,'_closed',True))
         layout=QVBoxLayout(self)
@@ -33,7 +33,7 @@ class ReportPreviewDialog(QDialog):
         self.code_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.code_table.setHorizontalHeaderLabels([_('성적서 코드'),_('수량'),_('전체 Unit 대비 %')])
         for row,(code,count) in enumerate(self.codes):
-            for col,value in enumerate((code,count,f"{count/report['total_units']*100:.6f}" if report.get('total_units') else '—')):
+            for col,value in enumerate((code,count,f"{count/report['total_units']*100:.6f}" if code!='OT14' and report.get('total_units') else '—')):
                 item=QTableWidgetItem(str(value));self.code_table.setItem(row,col,item)
                 if code in ('1111','UNKNOWN','9999','SM03_DUMMY9999'):item.setBackground(QColor('#fff1ce'))
         top.addWidget(self.code_table)
@@ -41,6 +41,9 @@ class ReportPreviewDialog(QDialog):
         right_layout=QVBoxLayout(right)
         self.unit_table=QTableWidget(0,6);self.unit_table.setHorizontalHeaderLabels(['StripID','X','Y',_('Unit (좌표 환산)'),_('공정'),_('계산 사유')])
         self.unit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.unit_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.unit_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.unit_table.setProperty('dmt_multi_select',True)
         right_layout.addWidget(self.unit_table)
         page=QHBoxLayout();self.previous=QPushButton(_('이전'));self.next=QPushButton(_('다음'));self.page_label=QLabel()
         page.addWidget(self.previous);page.addWidget(self.page_label);page.addWidget(self.next);right_layout.addLayout(page)
@@ -53,6 +56,15 @@ class ReportPreviewDialog(QDialog):
         self.ski_view=self.panel(source,_('SKI 원문'))
         self.xml_view=self.panel(source,_('XML 원문'),self.xml_combo)
         layout.addWidget(source)
+        review=QGroupBox(_('미분류 코드 검토·분류'));review.setProperty('dmt_presentation','report-review');review_layout=QVBoxLayout(review)
+        review_layout.addWidget(QLabel(_('원본은 수정하지 않습니다. 선택 좌표 또는 현재 미분류 코드 전체에 분류와 사유를 기록합니다.')))
+        review_layout.addWidget(QLabel(_('Ctrl/Shift로 여러 좌표를 선택할 수 있습니다.')))
+        fields=QHBoxLayout();self.review_code=QLineEdit();self.review_code.setPlaceholderText(_('분류 코드 예: SM03, OT12'))
+        self.review_note=QLineEdit();self.review_note.setPlaceholderText(_('분류 사유 (필수)'))
+        self.classify_selected=QPushButton(_('선택 좌표 분류'));self.classify_all=QPushButton(_('현재 코드 전체 분류'));self.reset_review=QPushButton(_('분류 초기화'))
+        for widget in (self.review_code,self.review_note,self.classify_selected,self.classify_all,self.reset_review):fields.addWidget(widget)
+        review_layout.addLayout(fields);layout.insertWidget(3,review)
+        self.classify_selected.clicked.connect(lambda:self.classify_rows(False));self.classify_all.clicked.connect(lambda:self.classify_rows(True));self.reset_review.clicked.connect(self.reset_classifications)
         actions=QHBoxLayout();self.search_xml=QPushButton(_('NAS XML 찾기'));self.reload=QPushButton(_('원본 다시 조회'));self.stop=QPushButton(_('조회 중지'));self.status=QLabel();self.status.setWordWrap(True);close=QPushButton(_('닫기'))
         for widget in (self.search_xml,self.reload,self.stop,self.status,close):actions.addWidget(widget)
         layout.addLayout(actions)
@@ -69,6 +81,44 @@ class ReportPreviewDialog(QDialog):
         self.stop.setEnabled(False)
 
     @staticmethod
+    def report_codes(report):
+        codes=ordered_report_codes(report)
+        ot14=report.get('ot14_excluded_units',0)
+        if ot14:codes.append(('OT14',ot14))
+        return codes
+
+    def refresh_classifications(self):
+        from core.yield_calc import build_yield_report_aggregation
+        self.report=build_yield_report_aggregation(self.summary,self.report.get('model_name',''));self.trace=self.summary['report_trace']
+        self.codes=self.report_codes(self.report);self.code='';self.offset=0
+        self.code_table.blockSignals(True);self.code_table.setRowCount(len(self.codes))
+        for row,(code,count) in enumerate(self.codes):
+            percent='—' if code=='OT14' else f"{count/self.report['total_units']*100:.6f}" if self.report.get('total_units') else '—'
+            for column,value in enumerate((code,count,percent)):self.code_table.setItem(row,column,QTableWidgetItem(str(value)))
+        self.code_table.blockSignals(False)
+        if self.codes:self.code_table.setCurrentCell(0,0);self.select_code(0)
+        else:self.rows=[];self.unit_table.setRowCount(0);self.proof.clear();self.stop_source()
+        parent=self.parent()
+        if parent and hasattr(parent,'refresh_result'):parent.refresh_result()
+
+    def classify_rows(self,all_code):
+        from core.report_review import classify,UNRESOLVED
+        if self.code.upper() not in UNRESOLVED:
+            QMessageBox.warning(self,_('분류 오류'),_('9999, UNKNOWN, 1111 코드를 선택하세요.'));return
+        rows=trace_rows(self.trace,self.code,0,sum(n for c,n in self.codes if c==self.code))[0] if all_code else [self.rows[i.row()] for i in self.unit_table.selectionModel().selectedRows()]
+        if all_code and QMessageBox.question(self,_('전체 분류 확인'),_('현재 코드의 모든 좌표를 같은 코드로 분류합니까?')+f'\n{self.code}: {len(rows)} → {self.review_code.text()}',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
+        try:classify(self.summary,rows,self.review_code.text(),self.review_note.text())
+        except (ValueError,OSError) as error:QMessageBox.warning(self,_('분류 오류'),_(str(error)));return
+        self.refresh_classifications()
+
+    def reset_classifications(self):
+        from core.report_review import reset_classification
+        if QMessageBox.question(self,_('분류 초기화'),_('이 계산의 사용자 분류를 모두 초기화합니까?'),QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
+        try:reset_classification(self.summary)
+        except OSError as error:QMessageBox.warning(self,_('분류 오류'),str(error));return
+        self.refresh_classifications()
+
+    @staticmethod
     def panel(splitter,title,combo=None):
         group=QGroupBox(title);layout=QVBoxLayout(group)
         if combo is not None:layout.addWidget(combo)
@@ -79,10 +129,12 @@ class ReportPreviewDialog(QDialog):
         code,count=self.codes[row]
         if code==self.code:return
         self.code=code;self.offset=0
+        pending=code.upper() in ('9999','UNKNOWN','1111')
+        self.classify_selected.setEnabled(pending);self.classify_all.setEnabled(pending)
         traced=sum(len(group['coords']) for group in matching_groups(self.trace,code))
         if traced!=count:
             self.notice.setText(_('성적서 수량과 좌표 추적 수량이 다릅니다. 집계 규칙을 확인하세요.')+f' {code}: {count} / {traced}')
-        else:self.notice.setText(_('엑셀 수량과 좌표 추적 수량 일치')+f': {code} / {count}')
+        else:self.notice.setText((_('OT14는 수율·불량 열에서 제외하며 엑셀 검증 셀에만 기록합니다.') if code=='OT14' else _('엑셀 수량과 좌표 추적 수량 일치'))+f': {code} / {count}')
         self.fill_units()
 
     def page(self,delta):

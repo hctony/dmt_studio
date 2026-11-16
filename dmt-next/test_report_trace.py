@@ -48,11 +48,18 @@ class ReportTraceTests(unittest.TestCase):
         from openpyxl import load_workbook
         summary,report=self.fixture([(1,1,''),(2,1,'1111'),(1,2,'OT06'),(2,2,'170')],[(1,1),(2,1),(1,2),(2,2)])
         target=self.root/'report.xlsx';template=Path(__file__).resolve().parent.parent/'resources/templates/report.xlsx'
+        self.assertFalse(export_report_to_2xlsx(report,str(template),str(target))['success'])
+        self.assertFalse(target.exists())
+        from core.report_review import classify
+        with patch('core.report_review.DATA_DIR',self.root):
+            classify(summary,trace_rows(summary['report_trace'],'UNKNOWN')[0],'SM03','Original reviewed')
+            classify(summary,trace_rows(summary['report_trace'],'1111')[0],'OT12','Original reviewed')
+        report=build_yield_report_aggregation(summary,'MODEL')
         self.assertTrue(export_report_to_2xlsx(report,str(template),str(target))['success'])
         workbook=load_workbook(target);sheet=workbook.active
         actual={sheet.cell(1,column).value:sheet.cell(3,column).value for column in range(10,sheet.max_column+1)}
         self.assertEqual(actual,dict(ordered_report_codes(report)));workbook.close()
-        self.assertEqual(actual,{'UNKNOWN':1,'1111':1,'OT06':2})
+        self.assertEqual(actual,{'SM03':1,'OT12':1,'OT06':2})
 
     def test_unknown_causes_are_separate_and_live_ski_keeps_line_numbers(self):
         summary,report=self.fixture([(1,1,'')],[(1,1),(2,1)])
@@ -96,7 +103,8 @@ class ReportTraceTests(unittest.TestCase):
     def test_dummy_assignment_counts_bbt_first_and_traces_only_remaining_coordinates(self):
         full=[(1,1),(2,1),(1,2),(2,2)]
         summary,report=self.fixture([(2,2,'SM03')],full,[self.record('9999',dummy=True)],[(1,1)])
-        self.assertEqual(dict(ordered_report_codes(report)),{'SM03_DUMMY9999':3,'OT14':1})
+        self.assertEqual(dict(ordered_report_codes(report)),{'SM03_DUMMY9999':3})
+        self.assertEqual(report['ot14_excluded_units'],1)
         groups=matching_groups(summary['report_trace'],'SM03_DUMMY9999')
         self.assertEqual(groups[0]['reason'],'dummy9999');self.assertNotIn([1,1],groups[0]['coords'])
         self.assertEqual(trace_rows(summary['report_trace'],'OT14')[0][0]['reason'],'bbt')
@@ -125,13 +133,15 @@ class ReportTraceTests(unittest.TestCase):
 
     def test_report_ot14_counts_bbt_and_process_txt_once_each(self):
         summary,report=self.fixture([(2,1,'OT14')],[(1,1),(2,1)],bbt=[(1,1)])
-        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':2})
+        self.assertEqual(dict(ordered_report_codes(report)),{})
+        self.assertEqual(report['ot14_excluded_units'],2)
         self.assertEqual(report['existing_bbt_ot14_units'],1)
-        self.assertEqual(report['final_defects_by_code_including_bbt']['OT14']['process_breakdown'],{'BBT':1,'VRS':1})
+        self.assertEqual(summary['report_process_code_distribution']['VRS:OT14'],1)
         self.assertEqual(trace_rows(summary['report_trace'],'OT14')[1],2)
         # A process-only OT14 must not also be added as if it came from BBT.
         summary,report=self.fixture([(2,1,'OT14')],[(2,1)])
-        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1})
+        self.assertEqual(dict(ordered_report_codes(report)),{})
+        self.assertEqual(report['ot14_excluded_units'],1)
         self.assertEqual(report['existing_bbt_ot14_units'],0)
 
     def test_selected_strip_bbt_is_ot14_regardless_of_rpt_code_and_ski_membership(self):
@@ -140,9 +150,10 @@ class ReportTraceTests(unittest.TestCase):
         summary=calculate_yield_summary_by_process([self.root/'gather.txt'],[],[],[],None,4,3,self.root/'bbt',self.root/'final.ski')
         report=build_yield_report_aggregation(summary,'MODEL')
         self.assertEqual(summary['bbt_units'],2)
-        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':2,'SM03':1})
+        self.assertEqual(dict(ordered_report_codes(report)),{'SM03':1})
         self.assertEqual(report['existing_bbt_ot14_units'],2)
-        self.assertEqual(summary['defective_units'],3)
+        self.assertEqual(summary['defective_units'],1)
+        self.assertEqual(summary['total_units'],2)
         self.assertEqual(summary['good_units'],1)
         self.assertEqual(trace_rows(summary['report_trace'],'OT14')[0][0]['reason'],'bbt')
 
@@ -151,9 +162,10 @@ class ReportTraceTests(unittest.TestCase):
         other=self.root/'bbt'/'OTHER.rpt';other.write_text('X:001 Y:002 = 1 - 9998\n')
         summary=calculate_yield_summary_by_process([self.root/'gather.txt'],[],[],[],None,4,3,self.root/'bbt',self.root/'final.ski')
         report=build_yield_report_aggregation(summary,'MODEL')
-        self.assertEqual(dict(ordered_report_codes(report)),{'OT14':1,'SM03':1})
-        self.assertEqual(summary['total_strips'],1);self.assertEqual(summary['defective_units'],2)
-        self.assertEqual(report['final_vs_ski_delta'],1)
+        self.assertEqual(dict(ordered_report_codes(report)),{'SM03':1})
+        self.assertEqual(summary['total_strips'],1);self.assertEqual(summary['defective_units'],1)
+        self.assertEqual(summary['total_units'],3)
+        self.assertEqual(report['final_vs_ski_delta'],0)
 
     def test_xml_outside_nas_root_is_rejected_before_connecting(self):
         row={'strip_id':self.strip,'x':1,'y':1,'code':'1111','reason':'gather','process':'IVS'}

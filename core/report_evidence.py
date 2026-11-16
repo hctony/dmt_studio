@@ -65,6 +65,9 @@ def frozen_text(trace,row):
         _('계산에 사용한 X 폭')+': '+str(info.get('x_count',0)),
         f"SKI: {coord in info.get('ski_coords',[])} / BBT: {coord in info.get('bbt_coords',[])}",
         _('좌표 환산 Unit index (0 기준)')+': '+str((row['y']-1)*info.get('x_count',0)+row['x']-1)]
+    for decision in trace.get('classifications',[]):
+        if (decision['strip_id'],decision['x'],decision['y'])==(row['strip_id'],row['x'],row['y']):
+            lines+=['',_('사용자 분류 이력')+f": {decision['from_code']} → {decision['to_code']}",_('분류 사유')+': '+decision['note'],decision['at']]
     if trace.get('collection_validation',{}).get('enabled'):
         from core.collection import format_report
         lines+=['',format_report(trace['collection_validation'])]

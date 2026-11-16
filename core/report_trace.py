@@ -4,6 +4,7 @@ from pathlib import Path
 from core.report_codes import excel_code
 
 REASONS={
+ 'manual_review':'원본 확인 후 사용자 분류',
  'bbt':'BBT 좌표를 OT14로 배정',
  'dummy9999':'IVS Dummy 9999 양폐: BBT 제외 나머지 좌표',
  'gather':'선택된 공정 TXT 코드',
@@ -49,11 +50,15 @@ class ReportTrace:
         return dict(sorted(codes.items())),dict(sorted(processes.items()))
 
     def snapshot(self):
+        all_bbt={p for paths in self.bbt_sources.values() for p in paths}
+        selected_bbt={strip:paths for strip,paths in self.bbt_sources.items() if strip in self.strips}
+        used_bbt={p for paths in selected_bbt.values() for p in paths}
+        versions={p:v for p,v in self.versions.items() if p not in all_bbt or p in used_bbt}
         return {'version':1,'groups':[{'strip_id':strip,'code':code,'process':process,'reason':reason,
                     'coords':[list(c) for c in sorted(coords,key=lambda c:(c[1],c[0]))]}
                 for (strip,code,process,reason),coords in sorted(self.groups.items())],
                 'strips':self.strips,'inputs':self.inputs,'ivs_json_paths':self.ivs_json,
-                'bbt_folder':self.bbt_folder,'bbt_sources':self.bbt_sources,'ski_path':self.ski,'file_versions':self.versions,
+                'bbt_folder':self.bbt_folder,'bbt_sources':selected_bbt,'ski_path':self.ski,'file_versions':versions,
                 'collection_validation':self.collection_validation}
 
 

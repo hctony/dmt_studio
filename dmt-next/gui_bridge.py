@@ -189,7 +189,7 @@ class Controller(C.QObject):
             start=self.pages.get(key,0); start=min(start,max(0,((w.rowCount()-1)//200)*200)); rows=[]
             for r in range(start,min(start+200,w.rowCount())):
                 rows.append([w.item(r,c).text() if w.item(r,c) else '' for c in range(w.columnCount())])
-            return dict(d,type='table',start=start,total=w.rowCount(),headers=[w.horizontalHeaderItem(c).text() if w.horizontalHeaderItem(c) else str(c+1) for c in range(w.columnCount())],rows=rows,selected=w.currentRow(),sortable=w.isSortingEnabled(),sortColumn=w.horizontalHeader().sortIndicatorSection(),sortDescending=w.horizontalHeader().sortIndicatorOrder()==C.Qt.DescendingOrder)
+            return dict(d,type='table',start=start,total=w.rowCount(),headers=[w.horizontalHeaderItem(c).text() if w.horizontalHeaderItem(c) else str(c+1) for c in range(w.columnCount())],rows=rows,selected=w.currentRow(),multi=bool(w.property('dmt_multi_select')),selectedRows=[i.row() for i in w.selectionModel().selectedRows()] if w.property('dmt_multi_select') else [],sortable=w.isSortingEnabled(),sortColumn=w.horizontalHeader().sortIndicatorSection(),sortDescending=w.horizontalHeader().sortIndicatorOrder()==C.Qt.DescendingOrder)
         if isinstance(w,W.QListWidget):
             requested_page=w.property('dmt_image_page')
             if requested_page is not None:
@@ -313,7 +313,16 @@ class Controller(C.QObject):
                 elif action=='list' and isinstance(w,W.QListWidget): w.setCurrentRow(int(v))
                 elif action=='list-check' and isinstance(w,W.QListWidget): w.item(a['row']).setCheckState(C.Qt.Checked if v else C.Qt.Unchecked)
                 elif action=='table' and isinstance(w,W.QTableWidget):
-                    r,c=int(a['row']),int(a.get('column',0));w.setCurrentCell(r,c)
+                    r,c=int(a['row']),int(a.get('column',0))
+                    if w.property('dmt_multi_select') and (a.get('ctrl') or a.get('shift')):
+                        selection=w.selectionModel();index=w.model().index(r,c)
+                        if not index.isValid():raise ValueError('Invalid selection')
+                        if a.get('shift'):
+                            first=max(0,w.currentRow());area=C.QItemSelection(w.model().index(min(first,r),0),w.model().index(max(first,r),w.columnCount()-1))
+                            selection.select(area,C.QItemSelectionModel.ClearAndSelect|C.QItemSelectionModel.Rows)
+                        else:selection.select(index,C.QItemSelectionModel.Toggle|C.QItemSelectionModel.Rows)
+                        selection.setCurrentIndex(index,C.QItemSelectionModel.NoUpdate)
+                    else:w.setCurrentCell(r,c)
                     if a.get('double'): w.cellDoubleClicked.emit(r,c)
                     else: w.cellClicked.emit(r,c)
                 elif action=='sort' and isinstance(w,W.QTableWidget) and w.isSortingEnabled():
