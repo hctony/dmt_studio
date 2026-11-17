@@ -136,7 +136,18 @@ class IvsScanThread(QThread):
                         barcode = read_barcode_from_xml(fc, sftp) if fc else None
                         check_cancelled(self._cancel.is_set)
                         if barcode and observed_strip(barcode, 0):
-                            if folder_index(strip_folder) in valid_indexes and not xml_files:
+                            if folder_index(strip_folder) in valid_indexes and xml_files:
+                                # Barcode is readable via FC, but this occurrence's
+                                # inspection XML failed. Do not resurrect an older NG.
+                                for failed_xml in xml_files:
+                                    try:
+                                        meta=sftp.metadata(failed_xml) if getattr(sftp,'_dmt_scan_session',False) is True else sftp.stat(failed_xml)
+                                        stamp=float(meta.st_mtime) if isinstance(meta.st_mtime,(int,float)) else None
+                                    except (OSError,AttributeError):stamp=None
+                                    strip_history.append({'strip_id':barcode.strip().upper(),'machine':ctx.machine,'trial':ctx.trial,
+                                        'strip_folder':strip_folder,'source_xml':failed_xml,'source_mtime':stamp,
+                                        'clock_basis':'source_file_mtime','parse_failed':True})
+                            elif folder_index(strip_folder) in valid_indexes:
                                 try:
                                     metadata=sftp.metadata(fc) if getattr(sftp,'_dmt_scan_session',False) is True else sftp.stat(fc)
                                     stamp=metadata.st_mtime
@@ -156,8 +167,15 @@ class IvsScanThread(QThread):
             population = population_payload(strip_ids, self.units_per_strip, grid_units, missing_barcodes,
                                             'trial' if self.trial_path.strip() else 'lot', parse_errors)
             population['xml_count'] = parsed_xml_count
+            from core.ivs_latest import select_latest
+            history_records=records
+            records,selection=select_latest(records,strip_history)
             payload = records_to_json(model, lot, records, population)
-            payload['strip_history']={'schema':'dmt-its-history-v1','complete':not missing_barcodes and not parse_errors,'events':strip_history}
+            payload['history_records']=[asdict(r) for r in history_records]
+            payload['latest_selection']=selection
+            payload['strip_history']={'schema':'dmt-its-history-v1','complete':not missing_barcodes and not parse_errors and selection['complete'],'events':strip_history}
+            self.progress.emit(_('Barcode별 최신 작업 반영')+f": {len(selection['selected'])} / "+_('이전 작업 제외')+f": {selection['replaced_occurrences']}")
+            for issue in selection['issues'][:30]:self.progress.emit(_('작업 시각 확인 필요')+f": {issue['strip_id']} · {issue['reason']}")
             if getattr(sftp,'_dmt_scan_session',False) is True:
                 payload['scan_metrics']=sftp.report()
                 payload['scan_metrics'].update(elapsed_seconds=round(time.monotonic()-started,4),connection_seconds=round(connection_seconds,4))

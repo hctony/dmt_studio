@@ -1,5 +1,7 @@
 # DMT Analysis Studio
 
+0.4.10의 [Barcode별 마지막 IVS 작업 적용](IVS-LATEST.md)을 참고하세요.
+
 0.4.9의 [성적서 검증·OT14 제외·미분류 코드 검토](REPORT-REVIEW.md)를 참고하세요.
 
 0.4.8의 [Go 중앙 수집·호기별 완전성 검증·원본 이력](COLLECTION-SERVICE.md)을 참고하세요.

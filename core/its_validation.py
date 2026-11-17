@@ -59,8 +59,9 @@ def load_history(paths):
         if len(usable)!=len(events) or not usable:continue
         latest=max(e['source_mtime'] for e in usable)
         heads=[e for e in usable if e['source_mtime']==latest]
-        if len({(e['machine'],e['trial']) for e in heads})!=1:continue
-        head=heads[0];epoch=[e for e in usable if (e['machine'],e['trial'])==(head['machine'],head['trial'])]
+        from core.ivs_latest import epoch_key
+        if len({epoch_key(e) for e in heads})!=1:continue
+        head=heads[0];epoch=[e for e in usable if epoch_key(e)==epoch_key(head)]
         result[strip]={**head,'epoch_start':min(e['source_mtime'] for e in epoch),'events':events}
     if grouped and not result:raise ValueError('설비·Trial 시각을 확인할 수 없어 최신 검사 이력을 확정할 수 없습니다.')
     return result

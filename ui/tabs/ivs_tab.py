@@ -324,6 +324,8 @@ class IvsStudioTab(QWidget):
             return
         try:
             payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+            from core.ivs import latest_payload
+            payload=latest_payload(payload)
             self.records = load_records_from_payload(payload)
             self.current_payload = payload
             if payload.get('model'):
@@ -354,7 +356,7 @@ class IvsStudioTab(QWidget):
             QMessageBox.critical(self, _("JSON 오류"), str(exc))
 
     def save_json(self) -> None:
-        if not self.records:
+        if not self.records and not getattr(self,'current_payload',None):
             QMessageBox.warning(self, _("저장 오류"), _("저장할 데이터가 없습니다. 먼저 스캔을 실행하세요."))
             return
         lot = self.records[0].lot if self.records else self.lot_in.text().strip()
@@ -366,6 +368,8 @@ class IvsStudioTab(QWidget):
             payload = records_to_json(model, lot, self.records, (getattr(self, 'current_payload', None) or {}).get('population'))
             if (getattr(self,'current_payload',None) or {}).get('strip_history'):
                 payload['strip_history']=self.current_payload['strip_history']
+            for field in ('history_records','latest_selection'):
+                if field in (self.current_payload or {}):payload[field]=self.current_payload[field]
             if (getattr(self,'current_payload',None) or {}).get('scan_metrics'):
                 payload['scan_metrics']=self.current_payload['scan_metrics']
             Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -429,6 +433,11 @@ class IvsStudioTab(QWidget):
                 self.summary_label.setText(self.summary_label.text() + '\n' + _("NAS 행·열과 설정된 Unit 수가 일치하지 않습니다.") +
                     f" NAS: {population.get('nas_grid_units', [])} / Unit: {population.get('units_per_strip', 0)}")
         rows = summary["by_defect_type"]
+        selection=(getattr(self,'current_payload',None) or {}).get('latest_selection')
+        if selection:
+            self.summary_label.setText(self.summary_label.text()+'\n'+_('Barcode별 최신 작업 반영')+f": {len(selection.get('selected',{}))} / "+_('이전 작업 제외')+f": {selection.get('replaced_occurrences',0)}")
+            if not selection.get('complete'):
+                self.summary_label.setText(self.summary_label.text()+'\n'+_('최신 작업 시각 또는 XML을 확인할 수 없습니다. 임시 결과이며 성적서 검증이 필요합니다.'))
         self.summary_table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             self.summary_table.setItem(row, 0, QTableWidgetItem(str(item["ivs_1"])))

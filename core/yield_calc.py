@@ -811,15 +811,17 @@ def _calculate_yield_summary_by_process(
     from core.report_trace import file_version
     watched_paths=list(vrs_paths)+list(fvi_paths)+list(ivs_paths or [])+list(ivs_json_paths or [])+([ski_path] if ski_path else [])
     input_versions={str(p):file_version(p) for p in watched_paths}
-    ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins)
+    ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins, include_history=True)
     from core.its_validation import load_history,validate_strip,source_metadata
     from core.collection import reports_for_inputs
     collection_validation=reports_for_inputs(list(vrs_paths)+list(fvi_paths)+list(ivs_paths or []),{'VRS':vrs_paths,'FVI':fvi_paths,'IVS':ivs_paths or []})
     its_history=load_history(ivs_json_paths or [])
     retired_ivs={}
     for strip,epoch in its_history.items():
-        retired_ivs[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if (r.machine,r.trial)!=(epoch['machine'],epoch['trial'])]
-        ivs_records_by_strip[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if (r.machine,r.trial)==(epoch['machine'],epoch['trial'])]
+        def is_current(record):
+            return (record.machine,record.trial)==(epoch['machine'],epoch['trial']) and (not epoch.get('strip_folder') or record.strip_folder==epoch['strip_folder'])
+        retired_ivs[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if not is_current(r)]
+        ivs_records_by_strip[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if is_current(r)]
     if its_history:
         ivs_dummy_scrap_strips={strip for strip,items in ivs_records_by_strip.items() if any(r.is_dummy_9999 for r in items)}
     process_priority = ["IVS", "VRS", "FVI"]

@@ -174,9 +174,26 @@ def records_to_json(model: str, lot: str, records: list[DefectRecord], populatio
     return payload
 
 
-def load_records_from_payload(payload: dict) -> list[DefectRecord]:
+def latest_payload(payload):
+    """Upgrade a history-bearing JSON without losing its previous records."""
+    if payload.get('schema')!='dmt-studio-ivs-v1' or not payload.get('strip_history',{}).get('events') or payload.get('latest_selection'):return payload
+    from core.ivs_latest import select_latest
+    raw=payload.get('history_records',payload.get('records',[]))
+    records,selection=select_latest([DefectRecord(**item) for item in raw],payload['strip_history']['events'])
+    history={**payload['strip_history']}
+    history['complete']=history.get('complete',True) and selection['complete']
+    return {**payload,**records_to_json(payload.get('model',''),payload.get('lot_id',''),records,payload.get('population')),
+        'history_records':raw,'latest_selection':selection,'strip_history':history}
+
+
+def load_records_from_payload(payload: dict, include_history=False) -> list[DefectRecord]:
     if payload.get("schema") == "dmt-studio-ivs-v1" and isinstance(payload.get("records"), list):
-        return [DefectRecord(**item) for item in payload["records"]]
+        items=payload.get('history_records',payload['records']) if include_history else payload['records']
+        records=[DefectRecord(**item) for item in items]
+        if not include_history and payload.get('strip_history',{}).get('events') and not payload.get('latest_selection'):
+            from core.ivs_latest import select_latest
+            records,_selection=select_latest(records,payload['strip_history']['events'])
+        return records
 
     # 기존 ivs_strip_extract.py JSON 호환 로더
     records: list[DefectRecord] = []
@@ -237,12 +254,12 @@ def load_ivs_dummy_scrap_strips(json_paths: list[Path], lot_id: str = "") -> set
     return scrap_strips
 
 
-def load_ivs_records_by_strip(json_paths: list[Path], lot_id: str = "", source_paths=None) -> dict[str, list[DefectRecord]]:
+def load_ivs_records_by_strip(json_paths: list[Path], lot_id: str = "", source_paths=None, include_history=False) -> dict[str, list[DefectRecord]]:
     records_by_strip: dict[str, list[DefectRecord]] = defaultdict(list)
     lot_key = lot_id.strip().upper()
     for json_path in json_paths:
         payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
-        for record in load_records_from_payload(payload):
+        for record in load_records_from_payload(payload,include_history=include_history):
             strip_id = record.strip_id.strip().upper()
             if not strip_id:
                 continue

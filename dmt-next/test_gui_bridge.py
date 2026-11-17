@@ -273,6 +273,22 @@ class GuiTests(unittest.TestCase):
         self.assertEqual([p['value'] for p in observed],[0,1])
         self.assertEqual(worker.dmt_progress['value'],2)
         self.assertEqual(worker.dmt_progress['max'],2)
+
+    def test_old_ivs_json_latest_zero_clears_ng_and_saves_history(self):
+        from core.models import DefectRecord
+        from core.ivs import records_to_json
+        record=DefectRecord('RX-01','A','M','RX-','99','1','Unit','T','1','0','SM03','SM03','','F',1,1,0,0,'old.xml',[])
+        payload=records_to_json('M','RX-',[record],{'strip_ids':['RX-01'],'strip_count':1,'units_per_strip':8,'complete':True,'total_units':8,'scope':'lot'})
+        payload['strip_history']={'schema':'dmt-its-history-v1','complete':True,'events':[
+            {'strip_id':'RX-01','machine':'A','trial':'99','strip_folder':'1','source_xml':'old.xml','source_mtime':100},
+            {'strip_id':'RX-01','machine':'C','trial':'1','strip_folder':'2','source_xml':'zero.xml','source_mtime':200}]}
+        source=self.root/'old.json';source.write_text(json.dumps(payload));self.answers['file']=str(source)
+        tab=self.tab(0);self.action(tab.btn_load,'click');self.assertEqual(tab.records,[])
+        self.assertIn('Barcode별 최신 작업 반영',tab.summary_label.text())
+        target=self.root/'new.json';self.answers['save']=str(target);self.action(tab.btn_save,'click')
+        self.assertTrue(target.exists(),self.dialogs)
+        saved=json.loads(target.read_text(encoding='utf-8'));self.assertEqual(saved['records'],[]);self.assertEqual(len(saved['history_records']),1)
+        self.assertEqual(saved['latest_selection']['selected']['RX-01']['machine'],'C')
     def test_model_import_merges_backs_up_and_restores_after_restart(self):
         import config
         path=self.root/'yield_model_settings.json'
