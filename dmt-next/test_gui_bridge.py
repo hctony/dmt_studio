@@ -64,6 +64,20 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(target.is_file(),self.dialogs)
         from openpyxl import load_workbook
         self.assertTrue(load_workbook(target).sheetnames)
+
+    def test_9999_has_no_unresolved_popup_and_can_export_excel(self):
+        from openpyxl import load_workbook
+        txt,ids=self.fixture();txt.write_text(txt.read_text().replace('SM03','9999'))
+        tab=self.tab(6)
+        for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):getattr(tab,field).clear()
+        tab.vrs_txt_in.setText(str(txt));tab.strip_json_in.setText(str(ids));tab.units_per_strip_in.setText('4');tab.xout_limit_in.setText('3')
+        self.action(tab.btn_calc,'click')
+        self.assertFalse(any(d.get('title')=='미분류 불량 코드' for k,d in self.dialogs if k=='message'))
+        target=self.root/'9999.xlsx';self.answers['save']=str(target);self.action(tab.btn_export_excel,'click')
+        self.assertTrue(target.exists(),self.dialogs)
+        book=load_workbook(target);sheet=book.active
+        self.assertEqual(sheet['H3'].value,1)
+        self.assertIn(('9999',1),[(sheet.cell(1,c).value,sheet.cell(3,c).value) for c in range(10,sheet.max_column+1)]);book.close()
     def test_ivs_json_loading_and_list_checkbox(self):
         from core.models import DefectRecord
         from core.ivs import records_to_json
@@ -498,7 +512,7 @@ class GuiTests(unittest.TestCase):
         target=self.root/'report.xlsx';self.answers['save']=str(target)
         with patch('core.report_review.DATA_DIR',self.root):
             self.action(tab.btn_calc,'click')
-            self.assertTrue(any('9999, UNKNOWN, 1111' in d.get('text','') for k,d in self.dialogs if k=='message'))
+            self.assertTrue(any('UNKNOWN, 1111은' in d.get('text','') for k,d in self.dialogs if k=='message'))
             self.action(tab.btn_export_excel,'click');self.assertFalse(target.exists())
             self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
             try:

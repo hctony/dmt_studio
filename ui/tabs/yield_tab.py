@@ -475,7 +475,7 @@ class YieldTab(QWidget):
         from core.report_review import unresolved_counts
         pending=unresolved_counts(self.summary)
         if pending:
-            QMessageBox.critical(self,_('미분류 불량 코드'),_('9999, UNKNOWN, 1111은 검토·분류가 필요합니다. 코드 미리보기에서 원본을 확인하고 분류하세요.')+'\n'+', '.join(f'{c}: {n}' for c,n in pending.items()))
+            QMessageBox.critical(self,_('미분류 불량 코드'),_('UNKNOWN, 1111은 검토·분류가 필요합니다. 코드 미리보기에서 원본을 확인하고 분류하세요. 9999는 생성 차단 대상에서 제외합니다.')+'\n'+', '.join(f'{c}: {n}' for c,n in pending.items()))
         audit=self.summary.get('its_validation',{})
         if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
             from core.its_validation import format_audits

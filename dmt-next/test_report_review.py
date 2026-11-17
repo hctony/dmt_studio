@@ -34,9 +34,9 @@ class ReviewTests(unittest.TestCase):
         book=load_workbook(output);sheet=book.active
         self.assertEqual([sheet[c].value for c in ('F3','G3','H3','H8','H9','H10','H11')],[7,6,1,1,8,2,0])
         self.assertNotIn('OT14',[c.value for c in sheet[1]]);self.assertIn('SUM(',sheet['H6'].value);book.close()
-    def test_all_three_unresolved_codes_block_export_until_reviewed(self):
+    def test_unknown_and_1111_block_export_and_9999_review_remains_optional(self):
         summary=self.fixture();before=self.txt.read_bytes();output=self.root/'blocked.xlsx'
-        self.assertEqual(unresolved_counts(summary),{'1111':1,'UNKNOWN':1,'9999':1})
+        self.assertEqual(unresolved_counts(summary),{'1111':1,'UNKNOWN':1})
         self.assertTrue(export_issues(summary));self.assertFalse(export_report_to_2xlsx(build_yield_report_aggregation(summary),'',str(output))['success']);self.assertFalse(output.exists())
         for code in ('1111','UNKNOWN','9999'):classify(summary,trace_rows(summary['report_trace'],code)[0],'SM03','Inspected XML and SKI')
         self.assertFalse(unresolved_counts(summary));self.assertFalse(export_issues(summary))
@@ -45,6 +45,22 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(export_report_to_2xlsx(report,'',str(output))['success'])
         from openpyxl import load_workbook
         book=load_workbook(output);self.assertEqual(book['분류 이력'].max_row,4);book.close()
+    def test_9999_is_exported_without_forced_classification(self):
+        from openpyxl import load_workbook
+        summary=self.fixture(('9999',));report=build_yield_report_aggregation(summary)
+        self.assertFalse(unresolved_counts(summary));self.assertFalse(export_issues(summary))
+        self.assertEqual(report['unresolved_codes'],{});self.assertEqual(report['ng_units'],1)
+        output=self.root/'9999.xlsx';self.assertTrue(export_report_to_2xlsx(report,'',str(output))['success'])
+        book=load_workbook(output);sheet=book.active
+        self.assertEqual(sheet['J1'].value,'9999');self.assertEqual(sheet['J3'].value,1);book.close()
+        # Optional reclassification remains available and survives recalculation.
+        classify(summary,trace_rows(summary['report_trace'],'9999')[0],'SM03','Reviewed optional 9999')
+        self.assertEqual(self.calculate()['report_code_distribution'],{'SM03':1})
+    def test_9999_does_not_bypass_strip_mismatch_or_other_code_guards(self):
+        summary=self.fixture(('9999',));summary['per_strip_rows'][0]['final_xout']+=1
+        self.assertTrue(export_issues(summary))
+        output=self.root/'blocked.xlsx';self.assertFalse(export_report_to_2xlsx(build_yield_report_aggregation(summary),'',str(output))['success']);self.assertFalse(output.exists())
+        mixed=self.fixture(('9999','UNKNOWN','1111'));self.assertEqual(unresolved_counts(mixed),{'UNKNOWN':1,'1111':1})
     def test_saved_review_reloads_only_for_identical_sources_and_can_reset(self):
         summary=self.fixture(('1111',));classify(summary,trace_rows(summary['report_trace'],'1111')[0],'OT12','Checked')
         loaded=self.calculate();self.assertFalse(unresolved_counts(loaded));self.assertEqual(loaded['report_code_distribution'],{'OT12':1})

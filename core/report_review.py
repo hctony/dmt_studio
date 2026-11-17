@@ -8,7 +8,8 @@ import re
 from datetime import datetime, timezone
 from config import DATA_DIR
 
-UNRESOLVED={'9999','UNKNOWN','1111'}
+UNRESOLVED={'UNKNOWN','1111'}
+REVIEWABLE=UNRESOLVED|{'9999'}
 
 def mismatch_rows(summary):
     key='final_xout' if summary.get('mode')=='process' else 'xout_count'
@@ -48,7 +49,7 @@ def prepare_summary(summary):
                 all_coords[group['strip_id']].add((x,y))
                 d=decisions.get((group['strip_id'],x,y,group['code']))
                 code=group['code'];reason=group['reason']
-                if d and code.upper() in UNRESOLVED and re.fullmatch(r'[A-Z]{2}[0-9]{2}',str(d.get('to_code',''))) and str(d.get('note','')).strip():
+                if d and code.upper() in REVIEWABLE and re.fullmatch(r'[A-Z]{2}[0-9]{2}',str(d.get('to_code',''))) and str(d.get('note','')).strip():
                     code=d['to_code'];reason='manual_review';applied.append(d)
                 groups[(group['strip_id'],code,group['process'],reason)].add((x,y))
         trace['groups']=[{'strip_id':strip,'code':code,'process':process,'reason':reason,'coords':[list(c) for c in sorted(coords)]}
@@ -84,7 +85,7 @@ def classify(summary,rows,target,note):
     if not note:raise ValueError('분류 사유를 입력하세요.')
     if sources_changed(summary):raise ValueError('계산 후 원본이 변경되었습니다. 수율을 다시 계산하세요.')
     original=summary.get('_original_report_trace',{})
-    valid={(g['strip_id'],x,y,g['code']) for g in original.get('groups',[]) if g['code'].upper() in UNRESOLVED for x,y in g['coords']}
+    valid={(g['strip_id'],x,y,g['code']) for g in original.get('groups',[]) if g['code'].upper() in REVIEWABLE for x,y in g['coords']}
     keys={(r['strip_id'],r['x'],r['y'],r['code']) for r in rows}
     if not keys or not keys.issubset(valid):raise ValueError('분류할 미분류 좌표를 선택하세요.')
     decisions=list(summary.get('report_classifications',[]));decisions=[d for d in decisions if (d['strip_id'],d['x'],d['y'],d['from_code']) not in keys]

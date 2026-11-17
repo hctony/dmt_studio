@@ -102,8 +102,8 @@ class ReportPreviewDialog(QDialog):
         if parent and hasattr(parent,'refresh_result'):parent.refresh_result()
 
     def classify_rows(self,all_code):
-        from core.report_review import classify,UNRESOLVED
-        if self.code.upper() not in UNRESOLVED:
+        from core.report_review import classify,REVIEWABLE
+        if self.code.upper() not in REVIEWABLE:
             QMessageBox.warning(self,_('분류 오류'),_('9999, UNKNOWN, 1111 코드를 선택하세요.'));return
         rows=trace_rows(self.trace,self.code,0,sum(n for c,n in self.codes if c==self.code))[0] if all_code else [self.rows[i.row()] for i in self.unit_table.selectionModel().selectedRows()]
         if all_code and QMessageBox.question(self,_('전체 분류 확인'),_('현재 코드의 모든 좌표를 같은 코드로 분류합니까?')+f'\n{self.code}: {len(rows)} → {self.review_code.text()}',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
