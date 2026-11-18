@@ -622,5 +622,6 @@
   "IVS Dummy 지정 코드 양폐 Strip": "IVS Dummy 指定代碼報廢 Strip",
   "IVS Dummy 지정 코드 양폐 Unit (BBT 제외)": "IVS Dummy 指定代碼報廢 Unit（扣除 BBT）",
   "Dummy 지정 코드 전량 불량 수량(BBT 제외)": "Dummy 指定代碼整片不良數量（扣除 BBT）",
-  "최신 XML Dummy 지정 코드 적용 · SKI 좌표 검증 필요": "套用最新 XML 的 Dummy 指定代碼，需驗證 SKI 座標"
+  "최신 XML Dummy 지정 코드 적용 · SKI 좌표 검증 필요": "套用最新 XML 的 Dummy 指定代碼，需驗證 SKI 座標",
+  "NAS 로그인이 거부되었습니다. A PC의 NAS 연결 설정에서 주소, 포트, 사용자 이름과 비밀번호를 확인하세요.": "NAS 拒絕登入。請在 A 電腦的 NAS 連線設定確認位址、連接埠、使用者名稱及密碼。"
 }

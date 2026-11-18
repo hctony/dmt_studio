@@ -19,6 +19,10 @@ from core.cancellation import check_cancelled
 # Connection
 # ---------------------------------------------------------------------------
 
+class NasAuthenticationError(RuntimeError):
+    pass
+
+
 def connect() -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -30,6 +34,12 @@ def connect() -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
         sftp.get_channel().settimeout(30)
         from core.nas_cache import ScanSftp
         return ssh, ScanSftp(sftp)
+    except paramiko.AuthenticationException as error:
+        ssh.close()
+        raise NasAuthenticationError(
+            _("NAS 로그인이 거부되었습니다. A PC의 NAS 연결 설정에서 주소, 포트, 사용자 이름과 비밀번호를 확인하세요.")
+            + f" ({NAS_HOST}:{NAS_PORT})"
+        ) from error
     except Exception:
         ssh.close()
         raise

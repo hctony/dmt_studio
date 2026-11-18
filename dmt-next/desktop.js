@@ -85,15 +85,35 @@ app.whenReady().then(async()=>{
     clientWindow.on('closed',()=>{if(clientWindow===openedClient)clientWindow=null;lifecycle?.show();});await clientWindow.loadURL(url.href);win.hide();return true;
   });
   const connectionKeys=['DMT_NAS_HOST','DMT_NAS_PORT','DMT_NAS_USER','DMT_NAS_PASSWORD','DMT_NAS_ROOT'];
-  async function readConnection(){const result={};try{const content=await fs.readFile(path.join(app.getPath('userData'),'.env'),'utf8');for(const line of content.split(/\r?\n/)){const i=line.indexOf('=');if(i>0&&connectionKeys.includes(line.slice(0,i).trim()))result[line.slice(0,i).trim()]=line.slice(i+1).trim();}}catch(e){if(e.code!=='ENOENT')throw e;}return result;}
+  async function readConnection(){
+    const result=Object.fromEntries(connectionKeys.filter(key=>process.env[key]!==undefined).map(key=>[key,process.env[key]]));
+    try {
+      const content=await fs.readFile(path.join(app.getPath('userData'),'.env'),'utf8');
+      for(const line of content.split(/\r?\n/)){
+        const separator=line.indexOf('=');
+        if(separator<0)continue;
+        const key=line.slice(0,separator).trim();
+        if(!connectionKeys.includes(key))continue;
+        const value=line.slice(separator+1).trim();
+        const quote=value[0];
+        result[key]=value.length>=2&&(quote==='"'||quote==="'")&&value.endsWith(quote)?value.slice(1,-1):value;
+      }
+    } catch(error) {
+      if(error.code!=='ENOENT')throw error;
+    }
+    return result;
+  }
   ipcMain.handle('settings:connection-read',async()=>{const values=await readConnection();const hasPassword=!!values.DMT_NAS_PASSWORD;delete values.DMT_NAS_PASSWORD;return {values,hasPassword};});
   ipcMain.handle('settings:connection-save',async(_e,values)=>{
     if(allBusy()||network.sessions.size)throw new Error('원격 접속과 작업을 종료한 뒤 저장하세요. / 請先結束遠端連線及工作。');
     const current=await readConnection();
     for(const key of connectionKeys){if(typeof values[key]!=='string'||/[\r\n]/.test(values[key]))throw new Error('Invalid connection value');if(key==='DMT_NAS_PASSWORD'&&!values[key])continue;current[key]=values[key];}
+    for(const key of connectionKeys){if(key!=='DMT_NAS_PASSWORD'&&current[key]!==undefined)current[key]=current[key].trim();}
     const port=Number(current.DMT_NAS_PORT);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid NAS port');
     const dest=path.join(app.getPath('userData'),'.env');let other='';try{other=(await fs.readFile(dest,'utf8')).split(/\r?\n/).filter(line=>!connectionKeys.includes(line.split('=')[0].trim())).join('\n');}catch(e){if(e.code!=='ENOENT')throw e;}
-    await fs.writeFile(dest+'.tmp',other+'\n'+connectionKeys.map(key=>`${key}=${current[key]||''}`).join('\n'));await fs.rename(dest+'.tmp',dest);
+    const connectionLines=connectionKeys.map(key=>key+'="'+(current[key]||'')+'"');
+    await fs.writeFile(dest+'.tmp',other+'\n'+connectionLines.join('\n'));await fs.rename(dest+'.tmp',dest);
+    if(current.DMT_NAS_PASSWORD)privateValues.push(current.DMT_NAS_PASSWORD);
     await gui.retry();return true;
   });
   ipcMain.handle('ui:language',(_e,value)=>{language=value==='zh-TW'?'zh-TW':'ko';lifecycle?.setLanguage(language);});

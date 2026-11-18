@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from core.nas import (
-    connect, iter_dirs, iter_xml_files_recursive, folder_index,
+    connect, NasAuthenticationError, iter_dirs, iter_xml_files_recursive, folder_index,
     list_lot_trials, list_models, list_lots,
     parse_trial_context, load_bundle_infos, find_fc_file, read_barcode_from_xml,
 )
@@ -244,6 +244,8 @@ class ModelLotListThread(QThread):
             else:
                 values = list_lots(self.model, sftp)
             self.finished.emit(self.mode, values)
+        except NasAuthenticationError as error:
+            self.failed.emit(str(error))
         except Exception:
             self.failed.emit(traceback.format_exc())
         finally:
