@@ -434,6 +434,28 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(yield_tab.strip_json_in.text(),'')
         for mode in ('VRS','FVI','IVS'):self.assertTrue((output/f'Gather_{mode}_RX1234-.txt').is_file())
 
+    def test_batch_error_displays_incomplete_host_and_keeps_only_draft(self):
+        from types import SimpleNamespace
+        tab = self.tab(3)
+        tab.batch_modes = ['IVS']
+        tab.batch_current_idx = 0
+        tab.batch_run_context = {'model': 'MODEL', 'lot': 'RX-'}
+        tab.batch_out_dir = self.root
+        log = []
+        close = W.QPushButton()
+        tab.batch_dialog = SimpleNamespace(append_log=log.append, btn_close=close)
+        collection = {'mode': 'IVS', 'complete': False, 'receipt': {'id': 'fixture'}, 'hosts': [
+            {'path': 'offline-share', 'state': 'incomplete', 'errors': ['access denied']},
+            {'path': 'online-share', 'state': 'complete', 'matched_strips': 0},
+        ]}
+        with patch('core.yield_handoff.remember') as remember:
+            tab._on_batch_finished([], '', {'collection': collection})
+        self.assertTrue(remember.called)
+        self.assertIn('offline-share', log[0])
+        self.assertIn('access denied', self.dialogs[-1][1]['text'])
+        self.assertNotIn('online-share', log[0])
+        self.assertFalse(list(self.root.glob('Gather_*')))
+
     def test_ski_diagnosis_and_validation_json_export(self):
         txt,ids=self.fixture();folder=self.root/'bbt';folder.mkdir();ski=self.root/'final.ski';ski.write_text('RX1234-01,1,1\n')
         tab=self.tab(7);tab.strip_json_in.setText(str(ids));tab.txt_in.setText(str(txt));tab.skipdata_in.setText(str(folder));tab.ski_in.setText(str(ski))

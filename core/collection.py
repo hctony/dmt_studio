@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import time
 import urllib.request
+from urllib.error import HTTPError
 import uuid
 from contextlib import closing
 from config import DATA_DIR
@@ -24,7 +25,14 @@ def request(route,payload=None,method=None):
     body=json.dumps(payload).encode() if payload is not None else None
     req=urllib.request.Request(url+route,data=body,method=method or ('POST' if body else 'GET'),
         headers={'Authorization':'Bearer '+os.environ.get('DMT_COLLECTOR_TOKEN',''),'Content-Type':'application/json'})
-    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=5) as response:return json.load(response)
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req,timeout=5) as response:
+            return json.load(response)
+    except HTTPError as error:
+        with error:
+            detail=error.read(512).decode('utf-8',errors='replace').strip()
+        raise RuntimeError(f'TXT collector HTTP {error.code}: {detail or error.reason}') from error
 
 
 def parse_blocks(lines):
@@ -192,17 +200,20 @@ def reports_for_inputs(paths,stage_paths=None):
             'reports':reports,'errors':errors,'incomplete_hosts':[h for r in reports for h in r['hosts'] if h['state']!='complete']}
 
 
-def format_report(validation):
+def format_report(validation, *, failures_only=False):
     from core.i18n import _
     lines=[_('호기별 수집 검증')+': '+(_('완료') if validation.get('complete') else _('미완료 — 공식 저장 차단'))]
     for report in validation.get('reports',[]):
         for host in report['hosts']:
+            if failures_only and host['state']=='complete':
+                continue
             label=_('정상 수집') if host['state']=='complete' and host.get('matched_strips') else _('검색 완료 · LOT 기록 없음') if host['state']=='complete' else _('수집 미완료')
             lines.append(f"{report['mode']} · {host['path']} · {label} · "+_('발견/처리/실패')+f": {host.get('found',0)}/{host.get('processed',0)}/{len(host.get('errors') or [])+len(host.get('parse_errors') or [])}")
             lines.extend((host.get('errors') or [])[:3])
             lines.extend(f"{e['path']}: {e['error']}" for e in (host.get('parse_errors') or [])[:3])
     lines.extend(validation.get('errors',[]))
-    lines.append(_('LOT 기록 없음은 검사 완료 또는 불량 0개를 뜻하지 않습니다.'))
+    if not failures_only:
+        lines.append(_('LOT 기록 없음은 검사 완료 또는 불량 0개를 뜻하지 않습니다.'))
     return '\n'.join(lines)
 
 

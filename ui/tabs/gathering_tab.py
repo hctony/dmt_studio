@@ -806,8 +806,10 @@ class GatheringTab(QWidget):
 
     def _on_batch_finished(self, strips: list, output: str, summary: dict) -> None:
         mode = self.batch_modes[self.batch_current_idx]
+        collection = summary.get('collection') or {}
+        incomplete = bool(collection) and not collection.get('complete')
         for page in self.findChildren(GatheringModePage):
-            if page.mode == mode:
+            if page.mode == mode and not incomplete:
                 strips, output, summary = page.apply_duplicate_choices(strips, output, summary)
                 break
         if summary.get('duplicate_review_cancelled'):
@@ -816,13 +818,16 @@ class GatheringTab(QWidget):
             return
         context = self.batch_run_context
         lot = context['lot']
-        collection=summary.get('collection') or {}
         context['collection_receipt']=collection.get('receipt')
         context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
-        if collection and not collection.get('complete'):
+        if incomplete:
+            from core.collection import format_report
             from core.yield_handoff import remember
             remember(context['model'],lot,kind=mode,output=output,config=context)
-            self._on_batch_failed(_('수집 미완료 — 임시 결과만 보관하고 일괄 추출을 중단했습니다.'))
+            report = format_report({'complete': False, 'reports': [collection]}, failures_only=True)
+            self._on_batch_failed(
+                _('수집 미완료 — 임시 결과만 보관하고 일괄 추출을 중단했습니다.') + '\n\n' + report
+            )
             self.batch_dialog.btn_close.setEnabled(True)
             return
         out_file = self.batch_out_dir / f"Gather_{mode}_{lot}.txt"
