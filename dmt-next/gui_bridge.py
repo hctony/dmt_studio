@@ -189,7 +189,7 @@ class Controller(C.QObject):
             start=self.pages.get(key,0); start=min(start,max(0,((w.rowCount()-1)//200)*200)); rows=[]
             for r in range(start,min(start+200,w.rowCount())):
                 rows.append([w.item(r,c).text() if w.item(r,c) else '' for c in range(w.columnCount())])
-            return dict(d,type='table',start=start,total=w.rowCount(),headers=[w.horizontalHeaderItem(c).text() if w.horizontalHeaderItem(c) else str(c+1) for c in range(w.columnCount())],rows=rows,selected=w.currentRow(),multi=bool(w.property('dmt_multi_select')),selectedRows=[i.row() for i in w.selectionModel().selectedRows()] if w.property('dmt_multi_select') else [],sortable=w.isSortingEnabled(),sortColumn=w.horizontalHeader().sortIndicatorSection(),sortDescending=w.horizontalHeader().sortIndicatorOrder()==C.Qt.DescendingOrder)
+            return dict(d,type='table',start=start,total=w.rowCount(),headers=[w.horizontalHeaderItem(c).text() if w.horizontalHeaderItem(c) else str(c+1) for c in range(w.columnCount())],rows=rows,selected=w.currentRow(),multi=bool(w.property('dmt_multi_select')),selectedRows=[i.row() for i in w.selectionModel().selectedRows()] if w.property('dmt_multi_select') else [],sortable=w.isSortingEnabled(),sortColumn=w.horizontalHeader().sortIndicatorSection(),sortDescending=w.horizontalHeader().sortIndicatorOrder()==C.Qt.DescendingOrder,literalCells=bool(w.property('dmt_literal_cells')))
         if isinstance(w,W.QListWidget):
             requested_page=w.property('dmt_image_page')
             if requested_page is not None:

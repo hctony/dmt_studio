@@ -20,6 +20,12 @@ app.whenReady().then(async()=>{
   await win.webContents.executeJavaScript("document.getElementById('language').value='zh-TW';document.getElementById('language').dispatchEvent(new Event('change'))");
   const translated=await win.webContents.executeJavaScript("document.getElementById('title').textContent");
   if(translated!=='作業員檢驗履歷')throw new Error('History tab translation failed: '+translated);
+  const originalPath='C:\\검사 통계\\수율 계산.xml';
+  const literalTable={type:'table',id:'literal-history-test',headers:['작업자','원본 경로'],rows:[['테스트',originalPath]],start:0,total:1,selected:0,literalCells:true};
+  const cells=await win.webContents.executeJavaScript(`Array.from(render(${JSON.stringify(literalTable)}).querySelectorAll('tbody td'),td=>td.textContent)`);
+  if(cells[0]!=='테스트'||cells[1]!==originalPath)throw new Error('History original values were translated');
+  const proof=await win.webContents.executeJavaScript(`render(${JSON.stringify({type:'text',readonly:true,literal:true,text:'원본 경로: '+originalPath+'\n88,RX-,RX-01\nRX-,RX-01,EOS'})}).textContent`);
+  if(!proof.includes(originalPath)||!proof.includes('RX-,RX-01,EOS'))throw new Error('History original proof was translated');
   await delay(200);
   fs.writeFileSync(path.join(__dirname,'smoke-user-data','history-zh.png'),(await win.webContents.capturePage()).toPNG());
   await win.webContents.executeJavaScript("document.getElementById('language').value='ko';document.getElementById('language').dispatchEvent(new Event('change'))");

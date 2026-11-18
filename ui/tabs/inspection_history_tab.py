@@ -27,6 +27,7 @@ class InspectionHistoryTab(QWidget):
         filters.addWidget(self.btn_search); layout.addLayout(filters)
         self.status = QLabel(); layout.addWidget(self.status)
         self.table = QTableWidget(0, 8)
+        self.table.setProperty('dmt_literal_cells',True)
         self.table.setHorizontalHeaderLabels([_('공정'), 'LOT', 'StripID', _('작업자'),
             _('파일명 검사 시각'), _('파일 수정 시각'), _('불량 라인 수'), _('원본 경로')])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -34,7 +35,7 @@ class InspectionHistoryTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self.show_original)
         layout.addWidget(self.table, 2)
-        self.detail = QTextEdit(); self.detail.setReadOnly(True); layout.addWidget(self.detail, 2)
+        self.detail = QTextEdit(); self.detail.setReadOnly(True); self.detail.setProperty('dmt_literal_text',True); layout.addWidget(self.detail, 2)
         self.btn_export = QPushButton(_('선택 이력의 원본 TXT 저장'))
         self.btn_export.clicked.connect(self.export_original); layout.addWidget(self.btn_export)
         for widget in [self.lot_in, self.strip_in, self.operator_in]:
@@ -48,8 +49,8 @@ class InspectionHistoryTab(QWidget):
             self.table.clearSelection(); self.detail.clear()
             self.table.setRowCount(len(self.rows))
             for index, row in enumerate(self.rows):
-                values = [row['mode'], row['lot'], row['strip'], row['operator'] or _('확인 불가'),
-                    row['inspection_time'] or _('확인 불가'),
+                values = [row['mode'], row['lot'], row['strip'], row['operator'] or '—',
+                    row['inspection_time'] or '—',
                     datetime.fromtimestamp(row['source_mtime_ns'] / 1e9).isoformat(' ', timespec='seconds'),
                     row['defects'], row['source_path']]
                 for col, value in enumerate(values):

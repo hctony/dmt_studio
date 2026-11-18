@@ -63,6 +63,8 @@ class GuiTests(unittest.TestCase):
             self.action(tab.btn_search,'click')
             self.assertEqual(tab.table.rowCount(),1);self.assertIn('SM03',tab.detail.toPlainText())
             self.assertEqual(tab.table.item(0,3).text(),'admin')
+            self.assertTrue(self.c.widget(tab.table)['literalCells'])
+            self.assertTrue(self.c.widget(tab.detail)['literal'])
             output=self.root/'download.txt';self.answers['save']=str(output)
             self.action(tab.btn_export,'click');self.assertEqual(output.read_bytes(),body)
 
