@@ -68,7 +68,7 @@ func withinCleanup(root, path string) bool {
 func protectedCleanup(path string) bool {
 	for _, part := range strings.FieldsFunc(filepath.Clean(path), func(c rune) bool { return c == '/' || c == '\\' }) {
 		switch strings.ToLower(part) {
-		case ".git", ".ssh", ".aws", ".codex", ".agents", "windows", "node_modules", "backend", "backend-dist", "collection-runs", "report-reviews", "collector", "cache":
+		case ".git", ".ssh", ".aws", ".codex", ".agents", "windows", "program files", "program files (x86)", "programdata", "node_modules", "backend", "backend-dist", "collection-runs", "report-reviews", "collector", "cache":
 			return true
 		}
 	}
@@ -96,8 +96,33 @@ func validateCleanupRoot(path, store string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	if cleanupKey(path) != cleanupKey(canonical) {
-		return "", fmt.Errorf("LINK_ROOT_NOT_ALLOWED")
+	// EvalSymlinks also expands legitimate Windows 8.3 names. Inspect actual
+	// ancestor attributes instead of misclassifying a short name as a link.
+	for cursor := path; ; {
+		entry, err := os.Lstat(cursor)
+		if err != nil {
+			return "", err
+		}
+		if isCleanupLink(entry) {
+			return "", fmt.Errorf("LINK_ROOT_NOT_ALLOWED")
+		}
+		parent := filepath.Dir(cursor)
+		if parent == cursor {
+			break
+		}
+		cursor = parent
+	}
+	if protectedCleanup(canonical) {
+		return "", fmt.Errorf("SOURCE_ROOT_NOT_ALLOWED")
+	}
+	if store != "" {
+		resolvedStore, err := cleanupCanonicalStore(store)
+		if err != nil {
+			return "", err
+		}
+		if withinCleanup(canonical, resolvedStore) || withinCleanup(resolvedStore, canonical) {
+			return "", fmt.Errorf("CACHE_ROOT_NOT_ALLOWED")
+		}
 	}
 	info, e := os.Lstat(path)
 	if e != nil {
@@ -107,6 +132,28 @@ func validateCleanupRoot(path, store string) (string, error) {
 		return "", fmt.Errorf("NOT_A_DIRECTORY")
 	}
 	return canonical, nil
+}
+func cleanupCanonicalStore(path string) (string, error) {
+	current := path
+	tail := []string{}
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		tail = append(tail, filepath.Base(current))
+		current = parent
+	}
 }
 func (s *Server) makeCleanupPlan(ctx context.Context, roots []string, now time.Time, progress func(CleanupReport)) *CleanupPlan {
 	plan := &CleanupPlan{ID: digest(fmt.Sprint(now.UnixNano(), roots))[:24], At: now, Cutoff: now.Add(-retention)}
@@ -140,6 +187,15 @@ func (s *Server) makeCleanupPlan(ctx context.Context, roots []string, now time.T
 				return nil
 			}
 			if d.IsDir() {
+				info, err := d.Info()
+				if err != nil {
+					row.Errors = append(row.Errors, path+": "+err.Error())
+					return filepath.SkipDir
+				}
+				if isCleanupLink(info) {
+					row.Errors = append(row.Errors, "LINK_SKIPPED: "+path)
+					return filepath.SkipDir
+				}
 				if path != canonical && protectedCleanup(path) {
 					return filepath.SkipDir
 				}

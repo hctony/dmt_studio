@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func oldCleanupFile(t *testing.T, path string, stamp time.Time) {
@@ -190,5 +191,35 @@ func TestCleanupCannotDeleteWithoutWritableAudit(t *testing.T) {
 	}
 	if _, e := os.Stat(file); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestCleanupAcceptsShortPathsButRejectsRealLinks(t *testing.T) {
+	s, root, _ := fixture(t)
+	file := filepath.Join(root, "old.txt")
+	oldCleanupFile(t, file, time.Now().Add(-40*24*time.Hour))
+	getShort := cleanupKernel.NewProc("GetShortPathNameW")
+	name, _ := syscall.UTF16PtrFromString(root)
+	buffer := make([]uint16, 32768)
+	n, _, e := getShort.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+	if n == 0 || n >= uintptr(len(buffer)) {
+		t.Fatal(e)
+	}
+	short := syscall.UTF16ToString(buffer[:n])
+	plan := cleanupPlan(t, s, short)
+	if len(plan.Files) != 1 {
+		t.Fatalf("short path rejected: %s: %+v", short, plan)
+	}
+	link := filepath.Join(filepath.Dir(root), "source-link")
+	if e := os.Symlink(root, link); e == nil {
+		if _, e := validateCleanupRoot(link, s.store); e == nil {
+			t.Fatal("symlink accepted")
+		}
+	} else {
+		t.Log("symlink creation not permitted; short-path assertions still verified")
+	}
+	report := s.deleteCleanupPlan(context.Background(), plan, func(CleanupReport) {})
+	if report.Deleted != 1 || report.Failed != 0 {
+		t.Fatal(report)
 	}
 }

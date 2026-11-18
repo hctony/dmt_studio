@@ -14,6 +14,16 @@ var cleanupKernel = syscall.NewLazyDLL("kernel32.dll")
 var cleanupFinalPath = cleanupKernel.NewProc("GetFinalPathNameByHandleW")
 var cleanupDisposition = cleanupKernel.NewProc("SetFileInformationByHandle")
 
+func isCleanupLink(info os.FileInfo) bool {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	if data, ok := info.Sys().(*syscall.Win32FileAttributeData); ok {
+		return data.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0
+	}
+	return false
+}
+
 func cleanupHandleIdentity(handle syscall.Handle) (string, error) {
 	var data syscall.ByHandleFileInformation
 	if e := syscall.GetFileInformationByHandle(handle, &data); e != nil {
