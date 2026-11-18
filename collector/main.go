@@ -37,18 +37,22 @@ type Host struct {
 	Completed string   `json:"completed_at"`
 }
 type Job struct {
-	ID       string            `json:"id"`
-	State    string            `json:"state"`
-	Hosts    []Host            `json:"hosts"`
-	Started  string            `json:"started_at"`
-	Active   []string          `json:"active"`
-	Progress map[string][2]int `json:"progress"`
-	mu       sync.Mutex
-	seen     time.Time
-	cancel   context.CancelFunc
+	Maintenance *CleanupReport    `json:"maintenance,omitempty"`
+	ID          string            `json:"id"`
+	State       string            `json:"state"`
+	Hosts       []Host            `json:"hosts"`
+	Started     string            `json:"started_at"`
+	Active      []string          `json:"active"`
+	Progress    map[string][2]int `json:"progress"`
+	mu          sync.Mutex
+	seen        time.Time
+	cancel      context.CancelFunc
 }
 type Server struct {
 	store, token string
+	cleanupToken string
+	maintenance  bool
+	plans        map[string]*CleanupPlan
 	mu           sync.Mutex
 	jobs         map[string]*Job
 	roots        map[string]*sync.Mutex
@@ -79,6 +83,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": true, "active": active})
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/maintenance/") {
+		s.serveMaintenance(w, r)
+		return
+	}
 	if r.URL.Path == "/scan" && r.Method == "POST" {
 		var req struct {
 			Roots []string `json:"roots"`
@@ -96,6 +104,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := digest(fmt.Sprint(time.Now().UnixNano(), req.Roots))[:24]
 		j := &Job{ID: id, State: "running", Started: time.Now().UTC().Format(time.RFC3339Nano), seen: time.Now(), cancel: cancel}
 		s.mu.Lock()
+		if s.maintenance {
+			s.mu.Unlock()
+			cancel()
+			http.Error(w, "Maintenance in progress", 409)
+			return
+		}
 		if len(s.jobs) >= 100 {
 			for k, old := range s.jobs {
 				old.mu.Lock()
@@ -389,10 +403,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(3)
 	}
-	server := &Server{store: store, token: token, jobs: map[string]*Job{}, roots: map[string]*sync.Mutex{}, slots: make(chan struct{}, 2)}
+	server := &Server{store: store, token: token, cleanupToken: os.Getenv("DMT_COLLECTOR_CLEANUP_TOKEN"), jobs: map[string]*Job{}, roots: map[string]*sync.Mutex{}, slots: make(chan struct{}, 2)}
 	go func() {
 		for range time.Tick(10 * time.Second) {
 			server.mu.Lock()
+			for id, plan := range server.plans {
+				if time.Since(plan.At) > 10*time.Minute {
+					delete(server.plans, id)
+				}
+			}
 			for id, job := range server.jobs {
 				job.mu.Lock()
 				if job.State == "running" && time.Since(job.seen) > time.Minute {

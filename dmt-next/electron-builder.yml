@@ -12,6 +12,7 @@ files:
   - measurement.js
   - diagnostics.js
   - collector-service.js
+  - txt-cleanup.js
   - assets/tray.ico
   - ui/studio.html
   - ui/studio.js
@@ -20,6 +21,7 @@ files:
   - ui/update-dialog.js
   - ui/backend-recovery.js
   - ui/network-panel.js
+  - ui/txt-cleanup-panel.js
   - ui/remote-client.js
   - ui/studio.css
   - ui/translations.js

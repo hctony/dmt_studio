@@ -22,6 +22,7 @@ aside{overflow-y:auto}nav,footer{flex-shrink:0}
 .report-code-sources .group{padding:12px;margin:0;min-width:0}.report-code-sources h2{margin-bottom:12px}
 .report-code-sources .text{height:310px;min-height:200px;white-space:pre;tab-size:2}
 .report-code-preview .report-review{background:#f0f6ff;border-color:#bed5ef;padding:16px}.report-review h2{margin-bottom:10px}.report-review .row{display:grid;grid-template-columns:minmax(120px,.7fr) minmax(230px,2fr) repeat(3,auto)}.report-review button:first-of-type{background:#2674c5;color:white}
+#txt-cleanup-panel .cleanup-warning{background:#fff0e8;color:#943c26;padding:12px;border:1px solid #edc7b9;border-radius:8px}#cleanup-roots{font:12px/1.6 Consolas,monospace;min-height:130px}#cleanup-delete{background:#a54230;color:white}#cleanup-status{white-space:pre-wrap}#txt-cleanup-panel pre{max-height:220px;min-height:90px}
 @media(max-width:1100px){.report-review .row{grid-template-columns:1fr 1fr}.report-review button{white-space:normal}}
 @media(max-width:1000px){.report-code-preview .report-code-tables,.report-code-preview .report-code-sources{grid-template-columns:minmax(0,1fr)}}
 .modal:has(.image-range-dialog){width:min(640px,95vw)}

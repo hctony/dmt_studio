@@ -6,7 +6,8 @@ const {NetworkServer}=require('./network-server');
 const {Measurement}=require('./measurement');
 const {Diagnostics,watchWindow}=require('./diagnostics');
 const {startCollector}=require('./collector-service');
-let win,gui,lifecycle,network,measurement,clientWindow,collector;
+const {TxtCleanup}=require('./txt-cleanup');
+let win,gui,lifecycle,network,measurement,clientWindow,collector,txtCleanup;
 const privateValues=[];
 const diagnostics=new Diagnostics(app.getPath('userData'),()=>[...privateValues,process.env.DMT_NAS_PASSWORD,...(network?.config.clients||[]).map(c=>c.token)].filter(Boolean));
 try{crashReporter.start({uploadToServer:false});}catch(error){diagnostics.write('crash-reporter-unavailable',{error:error.message});}
@@ -49,7 +50,20 @@ app.whenReady().then(async()=>{
   measurement=new Measurement(app.getPath('userData'));
   network=new NetworkServer({root:app.getPath('userData'),uiDir:path.join(__dirname,'ui'),createClient:(event,options)=>new GuiClient(event,{...options,diagnostics,label:path.basename(options.dataDir)}),seed:()=>gui.call('gui.export-settings'),local:gui,measurement,diagnostics,version:app.getVersion()});
   await network.initialize();
-  const allBusy=()=>gui.busy||gui.pending.size>0||network.busy||collector?.busy;
+  const allBusy=()=>gui.busy||gui.pending.size>0||network.busy||collector?.busy||txtCleanup?.busy;
+  txtCleanup=new TxtCleanup({root:app.getPath('userData'),collector,diagnostics,idle:()=>!gui.busy&&!gui.pending.size&&!network.busy,barrier:value=>{network.maintenance=value;}});
+  await txtCleanup.initialize();txtCleanup.startTimer();app.on('will-quit',()=>txtCleanup.close());
+  ipcMain.handle('cleanup:status',()=>txtCleanup.status());
+  ipcMain.handle('cleanup:roots',()=>gui.call('gui.cleanup-roots'));
+  ipcMain.handle('cleanup:preview',(_e,roots)=>txtCleanup.start('preview',roots));
+  ipcMain.handle('cleanup:cancel',()=>txtCleanup.cancel());
+  const confirmCleanup=async(auto)=>{
+    const preview=txtCleanup.preview;if(!preview)throw new Error('미리보기를 먼저 실행하세요. / 請先執行預覽。');
+    const result=await dialog.showMessageBox(win,{type:'warning',title:translate(auto?'TXT 자동 정리 승인':'원본 TXT 삭제 확인'),message:translate('선택한 원본 공유폴더의 30일 지난 TXT를 영구 삭제합니다. 휴지통에 보관되지 않습니다.'),detail:(auto?translate('자동 정리를 켜면 이후 새로 30일을 넘긴 파일도 24시간마다 유휴 시간에 정리합니다.')+'\n':'')+`${preview.report.count} TXT · ${(preview.report.bytes/1024/1024).toFixed(2)} MB\n`+preview.roots.join('\n'),buttons:[translate('취소'),translate(auto?'자동 정리 사용':'지금 삭제')],defaultId:0,cancelId:0});return result.response===1?preview.report.id:null;
+  };
+  ipcMain.handle('cleanup:delete',async()=>{const plan=await confirmCleanup(false);if(plan)return txtCleanup.start('delete',undefined,plan);return txtCleanup.status();});
+  ipcMain.handle('cleanup:configure',async(_e,args)=>{if(args.enabled){const plan=await confirmCleanup(true);if(!plan)return txtCleanup.status();if(txtCleanup.preview?.report.id!==plan)throw new Error('미리보기가 변경되었습니다. / 預覽已變更。');}return txtCleanup.configure(args.enabled===true,args.roots);});
+  ipcMain.handle('cleanup:logs',async()=>{const directory=path.join(app.getPath('userData'),'cache','collector','maintenance');await fs.mkdir(directory,{recursive:true});const error=await shell.openPath(directory);if(error)throw new Error(error);});
   ipcMain.handle('network:status',()=>network.status());
   ipcMain.handle('network:configure',(_e,args)=>network.configure(args));
   ipcMain.handle('network:start',()=>network.start());
@@ -91,7 +105,7 @@ app.whenReady().then(async()=>{
   ipcMain.handle('gui:reply',(_e,args)=>gui.call('dialog.reply',args));
   ipcMain.handle('workflow:call',(_e,method,args={})=>{
     if(!['status','start','finish','recommend','apply','preferences'].includes(method))throw new Error('Invalid workflow method');
-    if(['start','finish','apply'].includes(method)&&(gui.busy||gui.pending.size))throw new Error('작업 완료 후 사용하세요. / 請先完成工作。');
+    if(['start','finish','apply'].includes(method)&&(gui.busy||gui.pending.size||txtCleanup?.busy))throw new Error('작업 완료 후 사용하세요. / 請先完成工作。');
     return gui.call('workflow.'+method,{...args,version:app.getVersion()});
   });
   ipcMain.handle('workflow:export',async()=>{
@@ -122,7 +136,7 @@ app.whenReady().then(async()=>{
   win=new BrowserWindow({width:1500,height:1000,minWidth:900,minHeight:650,backgroundColor:'#f3f6fb',title:'DMT Analysis Studio',webPreferences:{preload:path.join(__dirname,'desktop-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:!app.isPackaged&&process.env.DMT_HEADLESS==='1'}});
   watchWindow(win,'local',diagnostics);
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-  const lifecycleGui={get busy(){return gui.busy||network.busy||collector?.busy;},get pending(){return gui.pending;},close(){network.close();measurement.close();gui.close();}};
+  const lifecycleGui={get busy(){return gui.busy||network.busy||collector?.busy||txtCleanup?.busy;},get pending(){return gui.pending;},close(){network.close();measurement.close();gui.close();}};
   lifecycle=installLifecycle({app,win,gui:lifecycleGui,iconPath:path.join(__dirname,'assets','tray.ico')});
   Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'모드 / 模式',submenu:[{label:'로컬 / 서버 관리 · 本機 / 伺服器管理',click:()=>lifecycle.show()},{label:'클라이언트 창 · 用戶端視窗',click:()=>clientWindow?.show()}]}]));
   win.webContents.on('will-navigate',event=>event.preventDefault());

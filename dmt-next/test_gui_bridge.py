@@ -568,4 +568,16 @@ class GuiTests(unittest.TestCase):
             self.assertTrue(any(event.get('id')==802 and 'error' in event for event in self.events))
             self.assertNotEqual(tab.units_per_strip_in.text(),'999')
 
+    def test_cleanup_roots_use_current_process_settings_and_reject_remote(self):
+        from ui.tabs.gathering_tab import GatheringModePage
+        tab=self.tab(3)
+        pages=tab.findChildren(GatheringModePage)
+        for page in pages:page.ip_in.setText('101-102');page.path_in.setText('TEST_BACKUP')
+        self.c.handle({'id':901,'method':'gui.cleanup-roots'})
+        result=next(e['result'] for e in self.events if e.get('id')==901)
+        self.assertEqual(len(result),6);self.assertEqual({r['mode'] for r in result},{'IVS','FVI','VRS'})
+        self.assertTrue(all('TEST_BACKUP' in r['path'] for r in result))
+        with patch.dict(os.environ,{'DMT_REMOTE_SESSION':'1'}):self.c.handle({'id':902,'method':'gui.cleanup-roots'})
+        self.assertTrue(any(e.get('id')==902 and 'error' in e for e in self.events))
+
 if __name__=='__main__':unittest.main()

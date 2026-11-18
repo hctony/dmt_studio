@@ -28,3 +28,4 @@ yield_model_settings.json
 **/collection-index.sqlite*
 **/collection-runs/
 **/report-reviews/
+**/txt-cleanup.json

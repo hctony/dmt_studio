@@ -1,5 +1,12 @@
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('studio',{
+  cleanupStatus:()=>ipcRenderer.invoke('cleanup:status'),
+  cleanupRoots:()=>ipcRenderer.invoke('cleanup:roots'),
+  cleanupPreview:roots=>ipcRenderer.invoke('cleanup:preview',roots),
+  cleanupDelete:()=>ipcRenderer.invoke('cleanup:delete'),
+  cleanupConfigure:args=>ipcRenderer.invoke('cleanup:configure',args),
+  cleanupCancel:()=>ipcRenderer.invoke('cleanup:cancel'),
+  cleanupLogs:()=>ipcRenderer.invoke('cleanup:logs'),
   exportDiagnostics:()=>ipcRenderer.invoke('diagnostics:export'),
   networkStatus:()=>ipcRenderer.invoke('network:status'),
   configureNetwork:args=>ipcRenderer.invoke('network:configure',args),

@@ -260,6 +260,14 @@ class Controller(C.QObject):
                 finally:
                     temporary.unlink(missing_ok=True)
                 result = {'name': name}
+            elif method=='gui.cleanup-roots':
+                if os.environ.get('DMT_REMOTE_SESSION')=='1':raise PermissionError('A PC administrator only')
+                from ui.tabs.gathering_tab import GatheringModePage
+                from workers.gather_workers import GatheringWorker
+                tab=self.window.centralWidget().widget(3);result=[]
+                for page in tab.findChildren(GatheringModePage):
+                    worker=GatheringWorker(page.mode,page.ip_in.text(),page.path_in.text(),tab.model_in.text(),tab.lot_in.text(),0,0,0,'170',set(),set())
+                    result.extend({'mode':page.mode,'path':str(path)} for path in worker.build_paths())
             elif method=='gui.image-step':
                 tabs=self.window.centralWidget()
                 if tabs.currentIndex()==0 and not self.waiters and not any(isinstance(w,W.QDialog) and w.isVisible() for w in self.app.topLevelWidgets()):
