@@ -75,7 +75,16 @@ app.whenReady().then(async()=>{try{
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).some(r=>r.cells[0].textContent==='SM03'&&r.cells[1].textContent==='2')"));await delay(250);
  fs.writeFileSync(path.join(root,'report-review-zh.png'),(await browser.webContents.capturePage()).toPNG());
  await rpc(0,'gui.action',{id:auditDialog.id,action:'reject'});browser.destroy();
- await delay(1600);const report=await js('window.studio.networkStatus()');assert.equal(report.sessions.length,4);assert(report.measurement.latest.backendRssBytes>0);assert.equal(new Set(report.measurement.latest.processes.map(p=>p.pid)).size,4);fs.writeFileSync(path.join(root,'network-panel.png'),(await win.webContents.capturePage()).toPNG());await js('window.studio.stopServer()');
+ await delay(1600);const report=await js('window.studio.networkStatus()');assert.equal(report.sessions.length,4);assert(report.measurement.latest.backendRssBytes>0);assert.equal(new Set(report.measurement.latest.processes.map(p=>p.pid)).size,4);fs.writeFileSync(path.join(root,'network-panel.png'),(await win.webContents.capturePage()).toPNG());
+ // The installed client window can open while the local server continues serving.
+ await js(`window.studio.connectClient(${JSON.stringify(report.urls[0])})`);
+ const localClient=BrowserWindow.getAllWindows().find(w=>w.id!==win.id);
+ assert(localClient);
+ assert(await localClient.webContents.executeJavaScript('window.studio.remote===true'));
+ assert.equal((await js('window.studio.networkStatus()')).running,true);
+ assert.equal((await js('window.studio.networkStatus()')).sessions.length,4);
+ localClient.close();
+ await js('window.studio.stopServer()');
  // Exercise the real client-mode IPC against a separate gateway (as on B PC).
  const {NetworkServer}=require('./network-server'),{Measurement}=require('./measurement'),{GuiClient}=require('./gui-client');const remoteRoot=path.join(root,'external-server');fs.mkdirSync(remoteRoot);const meter=new Measurement(remoteRoot);const external=new NetworkServer({root:remoteRoot,uiDir:path.join(__dirname,'ui'),createClient:(fn,opts)=>new GuiClient(fn,opts),seed:async()=>({}),local:{busy:false,pending:new Map()},measurement:meter,version:'test'});external.config.host='127.0.0.1';external.config.port=0;external.config.clients=tokens;await external.start();
  await js(`window.studio.connectClient(${JSON.stringify(external.addresses()[0])})`);const client=BrowserWindow.getAllWindows().find(w=>w.id!==win.id);assert(client);assert(await client.webContents.executeJavaScript("typeof require==='undefined'&&typeof process==='undefined'&&window.studio.remote===true"));
