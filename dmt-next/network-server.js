@@ -33,8 +33,23 @@ class NetworkServer {
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(this.config.port,this.config.host,()=>{server.removeListener('error',reject);resolve();});});
   server.on('error',e=>{this.startupError=e.message;});this.server=server;this.accepting=true;this.startupError=null;this.config.enabled=true;await this.persist();return this.status();
  }
- async stop(persist=true){if(this.busy)throw new Error('원격 작업/대기 작업을 먼저 완료하세요. / 請先完成遠端及排隊工作。');this.accepting=false;const server=this.server;this.server=null;if(server){server.closeIdleConnections();await new Promise(resolve=>server.close(resolve));}
-  for(const s of this.sessions.values())await s.client.stopForUpdate();this.sessions.clear();if(persist){this.config.enabled=false;await this.persist();}return this.status();
+ async stop(persist=true){
+  if(this.busy)throw new Error('원격 작업/대기 작업을 먼저 완료하세요. / 請先完成遠端及排隊工作。');
+  this.accepting=false;
+  const server=this.server;
+  this.server=null;
+  if(server){
+   await new Promise(resolve=>{
+    server.close(resolve);
+    // Jobs and transfers have drained. Disconnect polling clients so browser
+    // sockets cannot keep the server running during installation.
+    server.closeAllConnections();
+   });
+  }
+  for(const s of this.sessions.values())await s.client.stopForUpdate();
+  this.sessions.clear();
+  if(persist){this.config.enabled=false;await this.persist();}
+  return this.status();
  }
  close(){clearInterval(this.healthTimer);this.accepting=false;this.server?.closeAllConnections();this.server?.close();this.server=null;for(const s of this.sessions.values())s.client.close();this.sessions.clear();}
  authenticate(req){const raw=String(req.headers.authorization||'').replace(/^Bearer /,'');let client;for(const c of this.config.clients){const a=Buffer.from(raw),b=Buffer.from(c.token);if(a.length===b.length&&crypto.timingSafeEqual(a,b))client=c;}if(!client){const now=Date.now();const ip=req.socket.remoteAddress;const failures=(this.authFailures.get(ip)||[]).filter(t=>now-t<60000);failures.push(now);this.authFailures.set(ip,failures);const e=new Error('접속 키를 확인하세요. / 請確認連線金鑰。');e.status=failures.length>30?429:401;throw e;}return client;}

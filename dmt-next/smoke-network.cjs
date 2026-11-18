@@ -94,18 +94,36 @@ app.whenReady().then(async()=>{try{
   await delay(100);
  }
  await stopWhenIdle();
+ console.log('A server stopped while B remained open');
  await js('window.studio.startServer()');
+ console.log('A server restarted on original port');
  for(let n=0;n<150;n++){
-  if(navigationCount&&await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11").catch(()=>false))break;
+  if(navigationCount&&!browser.webContents.isLoading()){
+   const ready=await Promise.race([
+    browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11").catch(()=>false),
+    delay(500).then(()=>false)
+   ]);
+   if(ready)break;
+  }
   await delay(100);
  }
  assert(navigationCount>0);
  assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"));
  assert.equal((await api(0,'/api/download?name=remote-yield.json')).total_units,4);
+ console.log('B browser reconnected and retained its result');
  browser.destroy();
  // Reopen all three workspaces before checking the independent processes.
  await Promise.all(tokens.map((_token,index)=>rpc(index,'gui.snapshot')));
- await delay(1600);const report=await js('window.studio.networkStatus()');assert.equal(report.sessions.length,4);assert(report.measurement.latest.backendRssBytes>0);assert.equal(new Set(report.measurement.latest.processes.map(p=>p.pid)).size,4);fs.writeFileSync(path.join(root,'network-panel.png'),(await win.webContents.capturePage()).toPNG());
+ let report;
+ for(let n=0;n<100;n++){
+  report=await js('window.studio.networkStatus()');
+  if(report.sessions.length===4&&new Set(report.measurement.latest.processes.map(p=>p.pid)).size===4)break;
+  await delay(100);
+ }
+ assert.equal(report.sessions.length,4);
+ assert(report.measurement.latest.backendRssBytes>0);
+ assert.equal(new Set(report.measurement.latest.processes.map(p=>p.pid)).size,4);
+ fs.writeFileSync(path.join(root,'network-panel.png'),(await win.webContents.capturePage()).toPNG());
  // The installed client window can open while the local server continues serving.
  await js(`window.studio.connectClient(${JSON.stringify(report.urls[0])})`);
  const localClient=BrowserWindow.getAllWindows().find(w=>w.id!==win.id);
