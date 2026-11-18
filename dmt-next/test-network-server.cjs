@@ -21,3 +21,34 @@ test('canonical output paths work through Windows directory aliases',async t=>{c
 test('measurement keeps actual runs, includes queues and requires three different LOTs',async t=>{const s=await fixture(t);for(let n=0;n<3;n++){s.measurement.begin('A',{lot_in:'LOT'+n,control:'IVS 스캔'},n*10);const run=s.measurement.active.get('A');Object.assign(run,{started:Date.now()-10000,peakRssBytes:100000,peakHostCpu:20,peakHostMemory:30});s.measurement.end('A');}assert.equal(s.measurement.report().recommendation.trialConcurrency,2);assert.equal(s.measurement.report().recommendation.distinctLots,3);s.measurement.sample();assert(s.measurement.latest.totalMemoryBytes>0);assert(s.measurement.export().notes.length>0);s.measurement.enabled=false;s.measurement.begin('A');s.measurement.end('A');assert.equal(s.measurement.runs.length,3);});
 
 test('maintenance blocks new local and remote actions but preserves status and denies cleanup admin RPC',async t=>{const s=await fixture(t);await s.api(0);s.server.maintenance=true;await assert.rejects(s.rpc(0,'gui.action',{id:'x',action:'click'}),/TXT/);await assert.rejects(s.server.localCall('gui.action',{id:'x',action:'click'}),/TXT/);assert.equal((await s.api(0,'/api/rpc',{method:'gui.cleanup-roots'})).status,403);assert.equal((await s.api(0,'/api/rpc',{method:'cleanup:delete'})).status,403);assert(await s.rpc(0,'gui.snapshot',{}));s.server.maintenance=false;assert(await s.rpc(0,'gui.action',{id:'x',action:'input',value:'ready'}));});
+
+test('A work roots update an existing remote session without manual registration',async t=>{
+ const s=await fixture(t);
+ s.server.config.roots=[];
+ const automatic=path.join(s.root,'work-data');
+ await fs.mkdir(automatic);
+ await fs.writeFile(path.join(automatic,'report.txt'),'fixture');
+ await fs.writeFile(path.join(automatic,'.env'),'protected');
+ assert.equal((await s.api(0,'/api/browse',{path:automatic})).status,403);
+ await fs.writeFile(s.server.workRootsFile,JSON.stringify([automatic]));
+ const browse=await (await s.api(0,'/api/browse',{path:automatic})).json();
+ assert.deepEqual(browse.entries.map(entry=>entry.name),['report.txt']);
+ assert.equal((await s.api(0,'/api/browse',{path:path.join(automatic,'.env')})).status,403);
+ await fs.writeFile(s.server.workRootsFile,'[]');
+ assert.equal((await s.api(0,'/api/browse',{path:automatic})).status,403);
+});
+
+test('server restart preserves the per-key output workspace and changes event generation',async t=>{
+ const s=await fixture(t);
+ const initial=await (await s.api(0,'/api/events')).json();
+ const [session]=s.server.sessions.values();
+ await fs.writeFile(path.join(session.dir,'outputs','reconnect.txt'),'retained');
+ await s.server.stop(false);
+ const saved=JSON.parse(await fs.readFile(path.join(s.root,'network-server.json'),'utf8'));
+ assert.equal(saved.enabled,true);
+ s.server.config.port=Number(new URL(s.base).port);
+ await s.server.start();
+ const restored=await (await s.api(0,'/api/events?after=9999')).json();
+ assert.notEqual(restored.generation,initial.generation);
+ assert.equal(await (await s.api(0,'/api/download?name=reconnect.txt')).text(),'retained');
+});

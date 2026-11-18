@@ -456,6 +456,33 @@ class GuiTests(unittest.TestCase):
         self.assertNotIn('online-share', log[0])
         self.assertFalse(list(self.root.glob('Gather_*')))
 
+    def test_server_work_roots_use_local_inputs_and_legacy_ivs_range(self):
+        from ui.tabs.gathering_tab import GatheringModePage
+        tab = self.tab(3)
+        for page in tab.findChildren(GatheringModePage):
+            if page.mode == 'IVS':
+                page.ip_in.setText('108')
+                page.path_in.setText(r'bdm_kinsus\BDM_BACKUP')
+        data = self.root / 'server'
+        self.c.input_path = data / 'gui-inputs.json'
+        output = self.root / 'work'
+        output.mkdir()
+        tab.skipdata_in.setText(str(output))
+        self.c.publish_work_roots()
+        manifest = data / 'network-work-roots.json'
+        roots = json.loads(manifest.read_text(encoding='utf-8'))
+        self.assertIn(str(output), roots)
+        for station in range(101,111):
+            self.assertIn(r'\\110.15.136.' + str(station) + '\\bdm_kinsus\\', roots)
+        with patch.dict(os.environ,{'DMT_REMOTE_SESSION':'1','DMT_DATA_DIR':str(self.root/'remote'),
+                                    'DMT_ALLOWED_ROOTS':'[]','DMT_WORK_ROOTS_FILE':str(manifest)}):
+            from remote_paths import allowed_path
+            self.assertTrue(allowed_path(output/'result.txt'))
+            self.assertFalse(allowed_path(output/'.env'))
+            tab.skipdata_in.setText(str(self.root/'unapproved'))
+            self.c.publish_work_roots()
+            self.assertFalse(allowed_path(self.root/'unapproved'/'result.txt'))
+
     def test_ski_diagnosis_and_validation_json_export(self):
         txt,ids=self.fixture();folder=self.root/'bbt';folder.mkdir();ski=self.root/'final.ski';ski.write_text('RX1234-01,1,1\n')
         tab=self.tab(7);tab.strip_json_in.setText(str(ids));tab.txt_in.setText(str(txt));tab.skipdata_in.setText(str(folder));tab.ski_in.setText(str(ski))

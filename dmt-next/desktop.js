@@ -74,8 +74,16 @@ app.whenReady().then(async()=>{
   ipcMain.handle('measurement:enabled',(_e,value)=>{measurement.enabled=value===true;return measurement.report();});
   ipcMain.handle('measurement:export',async()=>{const r=await dialog.showSaveDialog(win,{title:'성능 측정 내보내기 / 匯出效能測量',defaultPath:'dmt-measurements.json',filters:[{name:'JSON',extensions:['json']}]});if(r.canceled)return null;await fs.writeFile(r.filePath,JSON.stringify(measurement.export(),null,2));return r.filePath;});
   ipcMain.handle('diagnostics:export',async()=>{const r=await dialog.showSaveDialog(win,{title:'진단 로그 내보내기 / 匯出診斷紀錄',defaultPath:'dmt-diagnostics.json',filters:[{name:'JSON',extensions:['json']}]});if(r.canceled)return null;const state=network.status();await fs.writeFile(r.filePath,JSON.stringify(diagnostics.export({version:app.getVersion(),measurement:measurement.report(),server:{running:state.running,active:state.active,queued:state.queued,concurrency:state.config.concurrency,sessions:state.sessions},localCrashDirectory:app.getPath('crashDumps')}),null,2));return r.filePath;});
-  let clientConnecting=false;
-  ipcMain.handle('network:client',async(_e,value)=>{
+  let clientConnecting=false, appQuitting=false, restoreTimer;
+  const clientConnectionFile=path.join(app.getPath('userData'),'client-connection.json');
+  async function rememberClient(origin, active){
+    try{
+      const temporary=clientConnectionFile+'.tmp';
+      await fs.writeFile(temporary,JSON.stringify({origin,active}),{mode:0o600});
+      await fs.rename(temporary,clientConnectionFile);
+    }catch(error){diagnostics.write('client-connection-save-failed',{error:error.message});}
+  }
+  async function openClient(value){
     if(clientConnecting)throw new Error('클라이언트 연결 중입니다. / 用戶端連線中。');
     const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new Error('A PC 주소만 입력하세요. 예: http://192.168.0.10:8765 / 請僅輸入 A 電腦位址。');
     const openedClient=new BrowserWindow({show:false,width:1500,height:1000,title:'DMT Analysis Studio — Client',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
@@ -86,6 +94,7 @@ app.whenReady().then(async()=>{
     openedClient.on('closed',()=>{
       if(clientWindow!==openedClient)return;
       clientWindow=null;
+      if(!appQuitting)void rememberClient(url.origin,false);
       lifecycle?.show();
     });
     try {
@@ -93,6 +102,8 @@ app.whenReady().then(async()=>{
       const previous=clientWindow;
       clientWindow=openedClient;
       if(previous&&!previous.isDestroyed())previous.close();
+      await rememberClient(url.origin,true);
+      if(openedClient.isDestroyed())return false;
       openedClient.show();
       win.hide();
       return true;
@@ -103,6 +114,10 @@ app.whenReady().then(async()=>{
     } finally {
       clientConnecting=false;
     }
+  }
+  ipcMain.handle('network:client',async(_e,value)=>{
+    clearTimeout(restoreTimer);
+    return openClient(value);
   });
   const connectionKeys=['DMT_NAS_HOST','DMT_NAS_PORT','DMT_NAS_USER','DMT_NAS_PASSWORD','DMT_NAS_ROOT'];
   async function readConnection(){
@@ -178,8 +193,24 @@ app.whenReady().then(async()=>{
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   const lifecycleGui={get busy(){return gui.busy||network.busy||collector?.busy||txtCleanup?.busy;},get pending(){return gui.pending;},close(){network.close();measurement.close();gui.close();}};
   lifecycle=installLifecycle({app,win,gui:lifecycleGui,iconPath:path.join(__dirname,'assets','tray.ico')});
+  app.on('before-quit',event=>{
+    if(!event.defaultPrevented){appQuitting=true;clearTimeout(restoreTimer);}
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'모드 / 模式',submenu:[{label:'로컬 / 서버 관리 · 本機 / 伺服器管理',click:()=>lifecycle.show()},{label:'클라이언트 창 · 用戶端視窗',click:()=>clientWindow?.show()}]}]));
   win.webContents.on('will-navigate',event=>event.preventDefault());
   await win.loadFile(path.join(__dirname,'ui','studio.html'));
+  try {
+    const saved=JSON.parse(await fs.readFile(clientConnectionFile,'utf8'));
+    if(saved.active===true&&typeof saved.origin==='string'){
+      const restoreClient=async()=>{
+        if(appQuitting||clientWindow||clientConnecting)return;
+        try{await openClient(saved.origin);}
+        catch{if(!appQuitting&&!clientWindow)restoreTimer=setTimeout(restoreClient,5000);}
+      };
+      restoreTimer=setTimeout(restoreClient,0);
+    }
+  } catch(error){
+    if(error.code!=='ENOENT')diagnostics.write('client-connection-restore-failed',{error:error.message});
+  }
 });
 app.on('window-all-closed',()=>app.quit());

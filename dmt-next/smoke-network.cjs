@@ -18,6 +18,14 @@ app.whenReady().then(async()=>{try{
  await js(`window.studio.configureNetwork(${JSON.stringify({port,concurrency:2,roots:[sources]})})`);const status=await js('window.studio.startServer()');const base=status.urls[0];
  async function api(index,route,payload){const response=await fetch(base+route,{method:payload?'POST':'GET',headers:{Authorization:'Bearer '+tokens[index].token},body:payload?JSON.stringify(payload):undefined});const result=await response.json();assert(response.ok,JSON.stringify(result));return result;}
  const rpc=(i,method,args={})=>api(i,'/api/rpc',{method,args});
+ async function stopWhenIdle(){
+  for(let attempt=0;attempt<100;attempt++){
+   try{await js('window.studio.stopServer()');return;}
+   catch(error){if(!error.message.includes('원격 작업/대기 작업'))throw error;}
+   await delay(100);
+  }
+  throw new Error('Server did not become idle: '+JSON.stringify((await js('window.studio.networkStatus()')).sessions.map(s=>[s.name,s.status])));
+ }
  async function clickMessages(i,id){const cursor=(await api(i,'/api/events?after=0')).seq;let done=false;const request=rpc(i,'gui.action',{id,action:'click'}).finally(()=>{done=true;});const seen=new Set();for(let n=0;n<500&&!done;n++){for(const e of (await api(i,'/api/events?after='+cursor)).events){if(e.event==='dialog'&&e.dialog.kind==='message'&&!seen.has(e.dialog.id)){seen.add(e.dialog.id);await rpc(i,'dialog.reply',{id:e.dialog.id,value:1024});}}await delay(20);}return request;}
  await Promise.all(tokens.map((_,i)=>api(i,'/api/status')));
  const ivsSource=path.join(sources,'ivs-rate.json');fs.writeFileSync(ivsSource,JSON.stringify({schema:'dmt-studio-ivs-v1',model:'TEST',lot_id:'TEST-',population:{strip_ids:['TEST-01','TEST-02','TEST-03'],strip_count:3,units_per_strip:64,nas_grid_units:[64],missing_barcode_folders:0,parse_errors:0,scope:'lot',complete:true,total_units:192},records:[{strip_id:'TEST-01',machine:'A',model:'TEST',lot:'TEST-',trial:'T',strip_folder:'1',container:'Unit',face:'T',unit_idx:'1',img_merge_idx:'0',ivs_1:'SM03',code_main:'SM03',code_sub:'',def_side:'F',strip_pt_x:1,strip_pt_y:1,img_pt_x:0,img_pt_y:0,source_xml:'test.xml',images:[]}]}));
@@ -32,7 +40,7 @@ app.whenReady().then(async()=>{try{
  const more=walk(sampleState.root).find(w=>w.type==='button'&&w.text==='추가로 보기');await rpc(2,'gui.action',{id:more.id,action:'click'});sampleState=await rpc(2,'gui.snapshot');const rangeDialog=sampleState.dialogs.find(d=>d.title==='이미지 추가 보기 범위');assert(rangeDialog);
  const rangeWidgets=walk(rangeDialog.content),rangeCode=rangeWidgets.find(w=>w.type==='select'),rangeInputs=rangeWidgets.filter(w=>w.type==='input');await rpc(2,'gui.action',{id:rangeCode.id,action:'select',value:rangeCode.items.indexOf('SM03')});
  await rpc(2,'gui.action',{id:rangeInputs[0].id,action:'input',value:'11'});await rpc(2,'gui.action',{id:rangeInputs[1].id,action:'input',value:'20'});
- const rangeBrowser=new BrowserWindow({show:false,width:1500,height:1100,webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:true,backgroundThrottling:false}});await rangeBrowser.loadURL(base);await rangeBrowser.webContents.executeJavaScript(`document.querySelector('.overlay input[type=password]').value=${JSON.stringify(tokens[2].token)};document.querySelector('.overlay form').requestSubmit()`);
+ const rangeBrowser=new BrowserWindow({show:false,width:1500,height:1100,webPreferences:{partition:'dmt-network-range',contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:true,backgroundThrottling:false}});await rangeBrowser.loadURL(base);await rangeBrowser.webContents.executeJavaScript(`document.querySelector('.overlay input[type=password]').value=${JSON.stringify(tokens[2].token)};document.querySelector('.overlay form').requestSubmit()`);
  for(let n=0;n<100;n++){if(await rangeBrowser.webContents.executeJavaScript("!!document.querySelector('#modals input')"))break;await delay(50);}await rangeBrowser.webContents.executeJavaScript("lang='zh-TW';labels();paint(true)");
  assert(await rangeBrowser.webContents.executeJavaScript("document.querySelector('#modals').textContent.includes('影像追加檢視範圍')"));await delay(200);fs.writeFileSync(path.join(root,'image-range-zh.png'),(await rangeBrowser.webContents.capturePage()).toPNG());rangeBrowser.destroy();
  await rpc(2,'gui.action',{id:rangeWidgets.find(w=>w.type==='button'&&w.text==='추가로 보기').id,action:'click'});sampleState=await rpc(2,'gui.snapshot');assert(walk(sampleState.root).some(w=>w.type==='list'&&w.total===20));assert.equal(sampleState.dialogs.length,0);
@@ -74,7 +82,29 @@ app.whenReady().then(async()=>{try{
  await browser.webContents.executeJavaScript("(async()=>{snapshot=await window.studio.snapshot();paint(true);})()");
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).some(r=>r.cells[0].textContent==='SM03'&&r.cells[1].textContent==='2')"));await delay(250);
  fs.writeFileSync(path.join(root,'report-review-zh.png'),(await browser.webContents.capturePage()).toPNG());
- await rpc(0,'gui.action',{id:auditDialog.id,action:'reject'});browser.destroy();
+ await rpc(0,'gui.action',{id:auditDialog.id,action:'reject'});
+ assert.equal(await browser.webContents.executeJavaScript("localStorage.getItem('dmt-access-key')!==null"),true);
+ // An already open B browser should recover after A restarts with the same
+ // port and key. A reload clears stale widget IDs and old dialog events.
+ let navigationCount=0;
+ browser.webContents.on('did-finish-load',()=>navigationCount++);
+ for(let n=0;n<100;n++){
+  const state=await js('window.studio.networkStatus()');
+  if(!state.active&&!state.queued)break;
+  await delay(100);
+ }
+ await stopWhenIdle();
+ await js('window.studio.startServer()');
+ for(let n=0;n<150;n++){
+  if(navigationCount&&await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11").catch(()=>false))break;
+  await delay(100);
+ }
+ assert(navigationCount>0);
+ assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"));
+ assert.equal((await api(0,'/api/download?name=remote-yield.json')).total_units,4);
+ browser.destroy();
+ // Reopen all three workspaces before checking the independent processes.
+ await Promise.all(tokens.map((_token,index)=>rpc(index,'gui.snapshot')));
  await delay(1600);const report=await js('window.studio.networkStatus()');assert.equal(report.sessions.length,4);assert(report.measurement.latest.backendRssBytes>0);assert.equal(new Set(report.measurement.latest.processes.map(p=>p.pid)).size,4);fs.writeFileSync(path.join(root,'network-panel.png'),(await win.webContents.capturePage()).toPNG());
  // The installed client window can open while the local server continues serving.
  await js(`window.studio.connectClient(${JSON.stringify(report.urls[0])})`);
@@ -84,7 +114,7 @@ app.whenReady().then(async()=>{try{
  assert.equal((await js('window.studio.networkStatus()')).running,true);
  assert.equal((await js('window.studio.networkStatus()')).sessions.length,4);
  localClient.close();
- await js('window.studio.stopServer()');
+ await stopWhenIdle();
  // Exercise the real client-mode IPC against a separate gateway (as on B PC).
  const {NetworkServer}=require('./network-server'),{Measurement}=require('./measurement'),{GuiClient}=require('./gui-client');const remoteRoot=path.join(root,'external-server');fs.mkdirSync(remoteRoot);const meter=new Measurement(remoteRoot);const external=new NetworkServer({root:remoteRoot,uiDir:path.join(__dirname,'ui'),createClient:(fn,opts)=>new GuiClient(fn,opts),seed:async()=>({}),local:{busy:false,pending:new Map()},measurement:meter,version:'test'});external.config.host='127.0.0.1';external.config.port=0;external.config.clients=tokens;await external.start();
  await js(`window.studio.connectClient(${JSON.stringify(external.addresses()[0])})`);const client=BrowserWindow.getAllWindows().find(w=>w.id!==win.id);assert(client);assert(await client.webContents.executeJavaScript("typeof require==='undefined'&&typeof process==='undefined'&&window.studio.remote===true"));

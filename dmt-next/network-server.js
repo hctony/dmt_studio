@@ -3,7 +3,7 @@ const http=require('node:http'),fs=require('node:fs/promises'),sync=require('nod
 const {pipeline}=require('node:stream/promises');
 const deny=message=>{const e=new Error(message);e.status=403;return e;};
 const within=(root,file)=>{const relative=path.relative(root,file);return relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative));};
-const protectedPath=file=>file.split(/[\\/]/).some(p=>['.env','.git','.ssh','.aws','network-server.json'].includes(p.toLowerCase()));
+const protectedPath=file=>file.split(/[\\/]/).some(p=>['.env','.git','.ssh','.aws','settings.ini','network-server.json','network-work-roots.json','client-connection.json'].includes(p.toLowerCase()));
 const controls=widget=>widget?[widget,...(widget.children||[]).flatMap(controls),...controls(widget.content)]:[];
 const json=(res,value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 async function body(req,limit=2*1024*1024){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit){const e=new Error('파일/요청이 너무 큽니다. / 檔案或請求過大。');e.status=413;throw e;}chunks.push(chunk);}return Buffer.concat(chunks);}
@@ -13,6 +13,7 @@ class NetworkServer {
   this.healthTimer=setInterval(()=>{for(const s of this.sessions.values())if(s.lastPoll&&Date.now()-s.lastPoll>20000&&!s.pollLost){s.pollLost=true;this.diagnostics?.write('client-poll-lost',{client:s.name,session:s.id,context:s.client.snapshot?.context,busy:s.client.busy,resources:s.client.lastResources});}},5000);this.healthTimer.unref();
   this.config={enabled:false,host:'0.0.0.0',port:8765,concurrency:1,roots:[],clients:['B','C','D'].map(name=>({name,token:crypto.randomBytes(32).toString('hex')}))};
   this.localSession={id:'A',name:'A (local)',client:local,events:[],seq:0,inFlight:0,queued:false};
+  this.workRootsFile=path.join(root,'network-work-roots.json');
  }
  async initialize(){try{const saved=JSON.parse(await fs.readFile(path.join(this.root,'network-server.json'),'utf8'));this.config={...this.config,...saved};}catch(e){if(e.code!=='ENOENT')this.startupError=e.message;}
   if(this.config.enabled){try{await this.start();}catch(e){this.startupError=e.message;}}return this.status();
@@ -40,8 +41,8 @@ class NetworkServer {
  async getSession(identity){const id=crypto.createHash('sha256').update(identity.token).digest('hex').slice(0,24);if(this.sessions.has(id))return this.sessions.get(id);if(this.opening.has(id))return this.opening.get(id);
   const promise=(async()=>{const dir=path.join(this.root,'remote-sessions',id);const fresh=!sync.existsSync(path.join(dir,'gui-inputs.json'));await fs.mkdir(path.join(dir,'outputs'),{recursive:true});await fs.mkdir(path.join(dir,'uploads'),{recursive:true});
    if(fresh){const settings=await this.seed();await fs.writeFile(path.join(dir,'settings-seed.json'),JSON.stringify(settings));for(const name of ['gui-inputs.json','yield_model_settings.json']){try{await fs.copyFile(path.join(this.root,name),path.join(dir,name));}catch(e){if(e.code!=='ENOENT')throw e;}}try{await fs.mkdir(path.join(dir,'templates'),{recursive:true});await fs.copyFile(path.join(this.root,'templates/report.xlsx'),path.join(dir,'templates/report.xlsx'));}catch(e){if(e.code!=='ENOENT')throw e;}}
-   const s={id,name:identity.name,dir,events:[],seq:0,inFlight:0,queued:false};
-   s.client=this.createClient(e=>this.observe(s,e),{dataDir:dir,env:{DMT_REMOTE_SESSION:'1',DMT_SETTINGS_FILE:path.join(dir,'settings.ini'),DMT_CACHE_DIR:path.join(this.root,'cache'),DMT_SERVER_NAS_ENV:path.join(this.root,'.env'),DMT_ALLOWED_ROOTS:JSON.stringify(this.config.roots)}});
+   const s={id,name:identity.name,dir,events:[],seq:0,inFlight:0,queued:false,generation:crypto.randomUUID()};
+   s.client=this.createClient(e=>this.observe(s,e),{dataDir:dir,env:{DMT_REMOTE_SESSION:'1',DMT_SETTINGS_FILE:path.join(dir,'settings.ini'),DMT_CACHE_DIR:path.join(this.root,'cache'),DMT_SERVER_NAS_ENV:path.join(this.root,'.env'),DMT_ALLOWED_ROOTS:JSON.stringify(this.config.roots),DMT_WORK_ROOTS_FILE:this.workRootsFile}});
    this.sessions.set(id,s);try{await s.client.call('gui.snapshot');return s;}catch(e){this.sessions.delete(id);s.client.close();throw e;}
   })();this.opening.set(id,promise);try{return await promise;}finally{this.opening.delete(id);}
  }
@@ -63,8 +64,31 @@ class NetworkServer {
   try{const result=await s.client.call(method,args);if(admitted){const state=await s.client.call('gui.snapshot');s.client.snapshot=state;s.client.busy=!!state.busy;}return result;}catch(e){if(admitted)s.failed=true;this.diagnostics?.write('request-failed',{client:s.name,session:s.id,method,error:e.message,context:s.client.snapshot?.context,resources:s.client.lastResources});throw e;}finally{s.inFlight--;this.release(s);}
  }
  async localCall(method,args){return this.invoke(this.localSession,method,args);}
- async checkedPath(s,value){if(typeof value!=='string'||protectedPath(value))throw deny('허용되지 않은 경로 / 不允許的路徑');const actual=await fs.realpath(path.resolve(value));const roots=[...this.config.roots,path.join(s.dir,'outputs'),path.join(s.dir,'uploads')];for(const root of roots){try{if(within(await fs.realpath(root),actual)&&!protectedPath(actual))return actual;}catch{}}throw deny('A PC에서 허용한 폴더만 사용할 수 있습니다. / 僅能使用 A 電腦允許的資料夾。');}
- async browse(s,value){if(!value)return {roots:[...this.config.roots,path.join(s.dir,'outputs'),path.join(s.dir,'uploads')]};const file=await this.checkedPath(s,value);const stat=await fs.stat(file);if(!stat.isDirectory())return {file};const entries=await fs.readdir(file,{withFileTypes:true});return {path:file,parent:path.dirname(file),entries:entries.filter(e=>!protectedPath(e.name)&&!e.isSymbolicLink()).sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name)).slice(0,2000).map(e=>({name:e.name,path:path.join(file,e.name),directory:e.isDirectory()}))};}
+ async fileRoots(s){
+  let automatic=[];
+  try{
+   const value=JSON.parse(await fs.readFile(this.workRootsFile,'utf8'));
+   if(Array.isArray(value))automatic=value.filter(root=>typeof root==='string'&&path.isAbsolute(root)&&!protectedPath(root));
+  }catch(error){
+   if(error.code!=='ENOENT')this.diagnostics?.write('work-roots-read-failed',{error:error.message});
+  }
+  return [...new Set([...this.config.roots,...automatic,path.join(s.dir,'outputs'),path.join(s.dir,'uploads')])];
+ }
+ async checkedPath(s,value){
+  if(typeof value!=='string'||protectedPath(value))throw deny('허용되지 않은 경로 / 不允許的路徑');
+  const actual=await fs.realpath(path.resolve(value));
+  const roots=await this.fileRoots(s);
+  // Check matching literal roots first, so an offline machine does not delay
+  // opening a different share already identified by its absolute path.
+  roots.sort((a,b)=>Number(within(b,value))-Number(within(a,value)));
+  for(const root of roots){
+   const volume=path.parse(root).root.toLowerCase();
+   if(volume.startsWith('\\\\')&&![path.parse(value).root.toLowerCase(),path.parse(actual).root.toLowerCase()].includes(volume))continue;
+   try{if(within(await fs.realpath(root),actual)&&!protectedPath(actual))return actual;}catch{}
+  }
+  throw deny('A PC에서 허용한 폴더만 사용할 수 있습니다. / 僅能使用 A 電腦允許的資料夾。');
+ }
+ async browse(s,value){if(!value)return {roots:await this.fileRoots(s)};const file=await this.checkedPath(s,value);const stat=await fs.stat(file);if(!stat.isDirectory())return {file};const entries=await fs.readdir(file,{withFileTypes:true});return {path:file,parent:path.dirname(file),entries:entries.filter(e=>!protectedPath(e.name)&&!e.isSymbolicLink()).sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name)).slice(0,2000).map(e=>({name:e.name,path:path.join(file,e.name),directory:e.isDirectory()}))};}
  async files(s){const root=path.join(s.dir,'outputs');const list=[];const visit=async(dir,depth)=>{if(depth>8||list.length>=10000)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.name.startsWith('.')||e.isSymbolicLink())continue;const file=path.join(dir,e.name);if(e.isDirectory())await visit(file,depth+1);else if(e.isFile()){const stat=await fs.stat(file);list.push({name:path.relative(root,file).split(path.sep).join('/'),size:stat.size,modified:stat.mtimeMs});}if(list.length>=10000)break;}};await visit(root,0);return list.sort((a,b)=>b.modified-a.modified);}
  async archive(s){if(s.archiving||s.queued||s.client.busy||s.inFlight)throw new Error('작업 완료 후 다운로드하세요. / 請先完成工作再下載。');s.archiving=true;s.nextContext={...s.client.snapshot?.context,clientName:s.name,control:'결과 ZIP 다운로드'};try{await this.admission(s);s.inFlight++;try{return await s.client.call('gui.archive-results');}finally{s.inFlight--;this.release(s);}}finally{s.archiving=false;}}
  async download(s,name,res){if(typeof name!=='string'||!name||path.isAbsolute(name)||name.split(/[\\/]/).some(p=>p==='..'||p.startsWith('.')))throw deny('Invalid file');const file=await this.checkedPath(s,path.join(s.dir,'outputs',name));if(!within(await fs.realpath(path.join(s.dir,'outputs')),file))throw deny('Invalid file');const stat=await fs.stat(file);if(!stat.isFile())throw deny('Invalid file');this.transfers++;try{res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Length':stat.size,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(path.basename(name))}`,'Cache-Control':'no-store'});await pipeline(sync.createReadStream(file),res);}finally{this.transfers--;}}
@@ -81,7 +105,7 @@ class NetworkServer {
   if(!this.accepting)throw new Error('서버가 종료 중입니다. / 伺服器正在關閉。');
   if(route==='/api/file'&&req.method==='GET'){const key=url.searchParams.get('ticket');const ticket=this.tickets.get(key);if(!ticket||ticket.expires<Date.now())throw deny('Download link expired');this.tickets.delete(key);await this.download(ticket.session,ticket.name,res);return;}
   const identity=this.authenticate(req);const s=await this.getSession(identity);
-  if(route==='/api/events'&&req.method==='GET'){if(s.pollLost)this.diagnostics?.write('client-reconnected',{client:s.name,session:s.id,gapMs:Date.now()-s.lastPoll});s.lastPoll=Date.now();s.pollLost=false;const after=Number(url.searchParams.get('after'))||0;const events=s.events.filter(e=>e.seq>after&&(e.event!=='dialog'||e.dialog.id===s.pendingDialog?.id));if(s.lastSnapshot?.seq>after)events.push(s.lastSnapshot);events.sort((a,b)=>a.seq-b.seq);json(res,{seq:s.seq,events,queue:s.queued,active:this.leases.has(s),name:s.name});return;}
+  if(route==='/api/events'&&req.method==='GET'){if(s.pollLost)this.diagnostics?.write('client-reconnected',{client:s.name,session:s.id,gapMs:Date.now()-s.lastPoll});s.lastPoll=Date.now();s.pollLost=false;const after=Number(url.searchParams.get('after'))||0;const events=s.events.filter(e=>e.seq>after&&(e.event!=='dialog'||e.dialog.id===s.pendingDialog?.id));if(s.lastSnapshot?.seq>after)events.push(s.lastSnapshot);events.sort((a,b)=>a.seq-b.seq);json(res,{seq:s.seq,events,generation:s.generation,queue:s.queued,active:this.leases.has(s),name:s.name});return;}
   if(route==='/api/diagnostics'&&req.method==='POST'){const value=JSON.parse((await body(req,16000)).toString());s.diagnosticTimes=(s.diagnosticTimes||[]).filter(t=>Date.now()-t<60000);if(s.diagnosticTimes.length<12){s.diagnosticTimes.push(Date.now());this.diagnostics?.write('client-browser',{client:s.name,session:s.id,context:s.client.snapshot?.context,browserEvent:String(value.kind||'unknown').slice(0,60),message:String(value.message||'').slice(0,4000),stack:String(value.stack||'').slice(0,6000),heapUsedBytes:Number(value.heapUsedBytes)||null,heapLimitBytes:Number(value.heapLimitBytes)||null});}json(res,{ok:true});return;}
   if(route==='/api/files'&&req.method==='GET'){json(res,await this.files(s));return;}
   if(route==='/api/archive'&&req.method==='POST'){json(res,await this.archive(s));return;}

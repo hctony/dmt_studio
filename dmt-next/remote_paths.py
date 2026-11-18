@@ -2,16 +2,63 @@
 import json
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+
+
+WORK_FILES = {'vrs_txt_in', 'fvi_txt_in', 'ivs_txt_in', 'txt_in', 'ivs_json_in',
+              'strip_json_in', 'exclude_json_in', 'ski_in', 'template_in'}
+WORK_FOLDERS = {'skipdata_in'}
+
+
+def configured_work_roots(data_dir, gathering, fields):
+    from core.utils import BBT_LOOKUP_ROOT, SKI_LOOKUP_ROOT
+    roots = {root for root in (BBT_LOOKUP_ROOT, SKI_LOOKUP_ROOT) if Path(root).is_absolute()}
+    for value in gathering:
+        path = PureWindowsPath(value)
+        if path.drive.startswith('\\\\') and not path.drive.endswith('$') and not protected_relative(value):
+            roots.add(path.anchor)
+    for name, value in fields:
+        if name not in WORK_FILES | WORK_FOLDERS:
+            continue
+        for part in re.split(r'[;\r\n]+', value):
+            part = part.strip().strip('"')
+            path = Path(part)
+            if not path.is_absolute() or protected_relative(part) or '..' in path.parts:
+                continue
+            root = path.parent if name in WORK_FILES else path
+            if root == Path(root.anchor) and not root.drive.startswith('\\\\'):
+                continue
+            if root.is_relative_to(data_dir) or data_dir.is_relative_to(root):
+                continue
+            roots.add(str(root))
+    return sorted(roots, key=str.casefold)
 
 
 def allowed_path(value):
-    path = Path(value).resolve()
-    if any(part.lower() in {'.env', '.git', '.ssh', '.aws', 'network-server.json'} for part in path.parts):
+    requested = Path(value)
+    path = requested.resolve()
+    if protected_relative(str(path)):
         return False
     roots = json.loads(os.environ.get('DMT_ALLOWED_ROOTS', '[]'))
+    manifest = os.environ.get('DMT_WORK_ROOTS_FILE')
+    if manifest:
+        try:
+            auto = json.loads(Path(manifest).read_text(encoding='utf-8'))
+            if isinstance(auto, list):
+                roots.extend(value for value in auto if isinstance(value, str))
+        except (OSError, ValueError):
+            pass
     roots.append(os.environ['DMT_DATA_DIR'])
-    return any(path.is_relative_to(Path(root).resolve()) for root in roots)
+    roots = sorted(map(Path, roots), key=lambda root: not requested.is_relative_to(root))
+    for root in roots:
+        if root.drive.startswith('\\\\') and root.drive.lower() not in {requested.drive.lower(), path.drive.lower()}:
+            continue
+        try:
+            if path.is_relative_to(root.resolve()):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def validate_input(controller, widget, value):
@@ -41,4 +88,6 @@ def validate_input(controller, widget, value):
 
 
 def protected_relative(value):
-    return any(part.lower() in {'.env', '.git', '.ssh', '.aws', 'settings.ini', 'network-server.json'} for part in re.split(r'[\\/]', value))
+    return any(part.lower() in {'.env', '.git', '.ssh', '.aws', 'settings.ini', 'network-server.json',
+                               'network-work-roots.json', 'client-connection.json'}
+               for part in re.split(r'[\\/]', value))

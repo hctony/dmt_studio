@@ -17,6 +17,8 @@ yield_model_settings.json
 **/yield-handoff/
 **/remote-sessions/
 **/network-server.json
+**/network-work-roots.json
+**/client-connection.json
 **/measurements.jsonl*
 **/diagnostics/
 **/nas-xml.sqlite*

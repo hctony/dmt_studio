@@ -146,12 +146,16 @@ def make_lines_for_coords(lot: str, strip_id: str, coords: set[tuple[int, int]],
 def is_full_unit_coords(coords: set[tuple[int, int]], x_count: int, y_count: int) -> bool:
     return bool(coords) and len(coords) == x_count * y_count
 
+BBT_LOOKUP_ROOT = r"D:\KINSUS DATA\Backup"
+SKI_LOOKUP_ROOT = r"D:\SkipData"
+
+
 def auto_find_bbt_skipdata_path(lot: str) -> str:
     """Finds the BBT/Skipdata folder in D:\\KINSUS DATA\\Backup by matching the LOT number against .rpt files."""
     if not lot:
         return ""
     from pathlib import Path
-    base_path = Path(r"D:\KINSUS DATA\Backup")
+    base_path = Path(BBT_LOOKUP_ROOT)
     if not base_path.exists():
         return ""
         
@@ -172,7 +176,7 @@ def auto_find_ski_file_path(lot: str) -> str:
     if not lot:
         return ""
     from pathlib import Path
-    base_path = Path(r"D:\SkipData")
+    base_path = Path(SKI_LOOKUP_ROOT)
     if not base_path.exists() or not base_path.is_dir():
         return ""
         

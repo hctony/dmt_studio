@@ -34,6 +34,8 @@ class Controller(C.QObject):
         self.window = MainWindow()
         self.window.resize(1440, 1000)
         self.restore_inputs()
+        self.last_work_roots = None
+        self.last_work_inputs = None
         from workflow_bridge import WorkflowBridge
         self.action_depth = 0
         self.workflow = WorkflowBridge(self, self.input_path.parent)
@@ -217,11 +219,47 @@ class Controller(C.QObject):
 
     def publish(self):
         try:
+            self.publish_work_roots()
             self.workflow.poll()
             snapshot=self.snapshot(); encoded=json.dumps(snapshot,ensure_ascii=False)
             if encoded!=self.last_snapshot:
                 self.last_snapshot=encoded;self.emit({'event':'snapshot','snapshot':snapshot})
         except Exception: traceback.print_exc(file=sys.stderr)
+
+    def gathering_roots(self):
+        from ui.tabs.gathering_tab import GatheringModePage
+        from workers.gather_workers import GatheringWorker
+        tab = self.window.centralWidget().widget(3)
+        result = []
+        for page in tab.findChildren(GatheringModePage):
+            worker = GatheringWorker(page.mode, page.ip_in.text(), page.path_in.text(),
+                tab.model_in.text(), tab.lot_in.text(), 0, 0, 0, '170', set(), set())
+            try:
+                result.extend({'mode': page.mode, 'path': str(path)} for path in worker.build_paths())
+                # Older untouched profiles list just IVS station 108. Also
+                # authorize the standard ten-station IVS share for collection.
+                if page.mode == 'IVS' and page.ip_in.text().strip() == '108' and page.path_in.text().split('\\')[0].lower() == 'bdm_kinsus':
+                    worker.ip_list_str = '101-110'
+                    result.extend({'mode': page.mode, 'path': str(path), 'extra': True} for path in worker.build_paths())
+            except ValueError:
+                continue
+        return result
+
+    def publish_work_roots(self):
+        if os.environ.get('DMT_REMOTE_SESSION') == '1':
+            return
+        from remote_paths import configured_work_roots
+        fields = [(key.rsplit('/', 1)[-1], widget.text()) for key, widget in self.input_widgets()
+                  if isinstance(widget, W.QLineEdit)]
+        if fields == self.last_work_inputs:
+            return
+        gathering = [row['path'] for row in self.gathering_roots()]
+        roots = configured_work_roots(self.input_path.parent, gathering, fields)
+        if roots != self.last_work_roots:
+            from core.yield_handoff import _write
+            _write(self.input_path.parent / 'network-work-roots.json', json.dumps(roots, ensure_ascii=False))
+            self.last_work_roots = roots
+        self.last_work_inputs = fields
 
     @C.Slot(dict)
     def handle(self,request):
@@ -262,12 +300,7 @@ class Controller(C.QObject):
                 result = {'name': name}
             elif method=='gui.cleanup-roots':
                 if os.environ.get('DMT_REMOTE_SESSION')=='1':raise PermissionError('A PC administrator only')
-                from ui.tabs.gathering_tab import GatheringModePage
-                from workers.gather_workers import GatheringWorker
-                tab=self.window.centralWidget().widget(3);result=[]
-                for page in tab.findChildren(GatheringModePage):
-                    worker=GatheringWorker(page.mode,page.ip_in.text(),page.path_in.text(),tab.model_in.text(),tab.lot_in.text(),0,0,0,'170',set(),set())
-                    result.extend({'mode':page.mode,'path':str(path)} for path in worker.build_paths())
+                result = [row for row in self.gathering_roots() if not row.get('extra')]
             elif method=='gui.image-step':
                 tabs=self.window.centralWidget()
                 if tabs.currentIndex()==0 and not self.waiters and not any(isinstance(w,W.QDialog) and w.isVisible() for w in self.app.topLevelWidgets()):
