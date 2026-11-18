@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from config import DATA_DIR
 
-UNRESOLVED={'UNKNOWN','1111'}
+UNRESOLVED={'UNKNOWN'}
 REVIEWABLE=UNRESOLVED|{'9999'}
 
 def mismatch_rows(summary):

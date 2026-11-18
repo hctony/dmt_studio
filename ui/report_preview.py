@@ -26,7 +26,7 @@ class ReportPreviewDialog(QDialog):
         if collection.get('enabled'):
             label=QLabel(_('수집 검증 완료') if collection.get('complete') else _('수집 미완료 — 임시 결과입니다. 미완료 호기는 원인 후보이며 판정 호기로 확정된 것은 아닙니다.'))
             label.setWordWrap(True);layout.addWidget(label)
-        self.notice=QLabel(_('엑셀에 기록될 코드와 수량입니다. 170은 OT06으로 합산합니다. 원본 조회는 A PC에서 수행합니다.'))
+        self.notice=QLabel(_('엑셀에 기록될 코드와 수량입니다. 1111·170·OT06은 OT06으로 합산합니다. 원본 조회는 A PC에서 수행합니다.'))
         self.notice.setWordWrap(True);layout.addWidget(self.notice)
         top=QSplitter(Qt.Horizontal);top.setProperty('dmt_presentation','report-code-tables')
         self.code_table=QTableWidget(len(self.codes),3)
@@ -35,7 +35,7 @@ class ReportPreviewDialog(QDialog):
         for row,(code,count) in enumerate(self.codes):
             for col,value in enumerate((code,count,f"{count/report['total_units']*100:.6f}" if code!='OT14' and report.get('total_units') else '—')):
                 item=QTableWidgetItem(str(value));self.code_table.setItem(row,col,item)
-                if code in ('1111','UNKNOWN','9999','SM03_DUMMY9999'):item.setBackground(QColor('#fff1ce'))
+                if code in ('UNKNOWN','9999','SM03_DUMMY9999'):item.setBackground(QColor('#fff1ce'))
         top.addWidget(self.code_table)
         right=QGroupBox(_('코드별 Strip·Unit 배정'))
         right_layout=QVBoxLayout(right)
@@ -77,7 +77,7 @@ class ReportPreviewDialog(QDialog):
         self.progress_timer=QTimer(self);self.progress_timer.timeout.connect(self.show_progress);self.progress_timer.start(400)
         if not self.trace:
             self.notice.setText(_('이 계산에는 좌표별 추적 기록이 없습니다. 공정 TXT 입력으로 수율을 다시 계산하세요.'))
-        if self.codes:self.code_table.setCurrentCell(next((i for i,(code,_) in enumerate(self.codes) if code in ('1111','UNKNOWN')),0),0)
+        if self.codes:self.code_table.setCurrentCell(next((i for i,(code,_) in enumerate(self.codes) if code == 'UNKNOWN'),0),0)
         self.stop.setEnabled(False)
 
     @staticmethod
@@ -104,7 +104,7 @@ class ReportPreviewDialog(QDialog):
     def classify_rows(self,all_code):
         from core.report_review import classify,REVIEWABLE
         if self.code.upper() not in REVIEWABLE:
-            QMessageBox.warning(self,_('분류 오류'),_('9999, UNKNOWN, 1111 코드를 선택하세요.'));return
+            QMessageBox.warning(self,_('분류 오류'),_('9999 또는 UNKNOWN 코드를 선택하세요.'));return
         rows=trace_rows(self.trace,self.code,0,sum(n for c,n in self.codes if c==self.code))[0] if all_code else [self.rows[i.row()] for i in self.unit_table.selectionModel().selectedRows()]
         if all_code and QMessageBox.question(self,_('전체 분류 확인'),_('현재 코드의 모든 좌표를 같은 코드로 분류합니까?')+f'\n{self.code}: {len(rows)} → {self.review_code.text()}',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
         try:classify(self.summary,rows,self.review_code.text(),self.review_note.text())
@@ -129,7 +129,7 @@ class ReportPreviewDialog(QDialog):
         code,count=self.codes[row]
         if code==self.code:return
         self.code=code;self.offset=0
-        pending=code.upper() in ('9999','UNKNOWN','1111')
+        pending=code.upper() in ('9999','UNKNOWN')
         self.classify_selected.setEnabled(pending);self.classify_all.setEnabled(pending)
         traced=sum(len(group['coords']) for group in matching_groups(self.trace,code))
         if traced!=count:

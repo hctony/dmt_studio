@@ -67,7 +67,8 @@ class ReportTrace:
 
 
 def matching_groups(trace,code):
-    return [group for group in trace.get('groups',[]) if excel_code(group['code'])==code]
+    return [group for group in trace.get('groups',[])
+            if group['code']==code or excel_code(group['code'])==code]
 
 
 def trace_rows(trace,code,offset=0,limit=200):

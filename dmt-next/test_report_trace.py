@@ -41,7 +41,7 @@ class ReportTraceTests(unittest.TestCase):
 
     def test_preview_uses_same_positive_code_counts_and_170_mapping_as_excel(self):
         ordered=ordered_report_codes({'final_defects_by_code_including_bbt':{'170':{'count':3},'OT06':{'count':2},'1111':{'count':1},'UNKNOWN':{'count':0}}})
-        self.assertEqual(ordered,[('1111',1),('OT06',5)])
+        self.assertEqual(ordered,[('OT06',6)])
 
     def test_preview_counts_equal_the_actual_generated_excel_columns(self):
         from core.export_excel import export_report_to_2xlsx
@@ -53,13 +53,12 @@ class ReportTraceTests(unittest.TestCase):
         from core.report_review import classify
         with patch('core.report_review.DATA_DIR',self.root):
             classify(summary,trace_rows(summary['report_trace'],'UNKNOWN')[0],'SM03','Original reviewed')
-            classify(summary,trace_rows(summary['report_trace'],'1111')[0],'OT12','Original reviewed')
         report=build_yield_report_aggregation(summary,'MODEL')
         self.assertTrue(export_report_to_2xlsx(report,str(template),str(target))['success'])
         workbook=load_workbook(target);sheet=workbook.active
         actual={sheet.cell(1,column).value:sheet.cell(3,column).value for column in range(10,sheet.max_column+1)}
         self.assertEqual(actual,dict(ordered_report_codes(report)));workbook.close()
-        self.assertEqual(actual,{'SM03':1,'OT12':1,'OT06':2})
+        self.assertEqual(actual,{'SM03':1,'OT06':3})
 
     def test_unknown_causes_are_separate_and_live_ski_keeps_line_numbers(self):
         summary,report=self.fixture([(1,1,'')],[(1,1),(2,1)])
@@ -75,7 +74,7 @@ class ReportTraceTests(unittest.TestCase):
         extra=self.root/'newer.txt';extra.write_text(f'1,{self.lot},{self.strip}\n{self.lot},{self.strip},2,1,T,SM03\n{self.lot},{self.strip},EOS\n')
         os.utime(extra,(time.time()+60,time.time()+60))
         summary,report=self.fixture([(1,1,'1111')],[(1,1)],extra=[extra])
-        self.assertEqual(dict(ordered_report_codes(report)),{'1111':1})
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT06':1})
         info=summary['report_trace']['strips'][self.strip]['processes']['VRS']
         self.assertEqual(info['selected_source'],str(self.root/'gather.txt'));self.assertIn(str(extra),info['sources'])
 
@@ -90,7 +89,7 @@ class ReportTraceTests(unittest.TestCase):
         xml=self.root/'actual.xml';xml.write_text(f'<Root barcode="{self.strip}"><Unit><P0 unit_idx="3" ivs_1="1111"/><P1 unit_idx="0" ivs_1="SM03"/></Unit></Root>')
         full=[(1,1),(2,1),(1,2),(2,2)]
         summary,report=self.fixture([(x,y,'170') for x,y in full],full,[self.record('1111',xml=str(xml))])
-        self.assertEqual(dict(ordered_report_codes(report)),{'1111':1,'OT06':3})
+        self.assertEqual(dict(ordered_report_codes(report)),{'OT06':4})
         rows,total=trace_rows(summary['report_trace'],'1111');self.assertEqual(total,1);row=rows[0]
         self.assertEqual(row['reason'],'ivs_recovery');self.assertEqual(matching_refs(summary['report_trace'],row)[0][4],str(xml))
         self.assertIn('1111',frozen_text(summary['report_trace'],row))

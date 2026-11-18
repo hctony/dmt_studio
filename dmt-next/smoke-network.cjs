@@ -54,20 +54,20 @@ app.whenReady().then(async()=>{try{
  const archive=await api(0,'/api/archive',{});const zip=await(await fetch(base+'/api/download?name='+encodeURIComponent(archive.name),{headers:{Authorization:'Bearer '+tokens[0].token}})).arrayBuffer();assert.equal(Buffer.from(zip).readUInt16LE(),0x4b50);
  const browser=new BrowserWindow({show:false,webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:true,backgroundThrottling:false}});await browser.loadURL(base);await browser.webContents.executeJavaScript(`document.querySelector('.overlay input[type=password]').value=${JSON.stringify(tokens[0].token)};document.querySelector('.overlay form').requestSubmit()`);
  for(let n=0;n<150;n++){if(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"))break;await delay(100);}assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"));
- assert(await browser.webContents.executeJavaScript("lang='zh-TW';labels();paint(true);document.querySelector('#navigation').textContent.includes('IVS 分析/查詢')"));
+ assert(await browser.webContents.executeJavaScript("localStorage.setItem('language','zh-TW');lang='zh-TW';labels();paint(true);document.querySelector('#navigation').textContent.includes('IVS 分析/查詢')"));
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('details.group button')).some(b=>b.textContent.includes('remote-yield.json'))"))break;await delay(100);}
  const destination=path.join(root,'browser-download.json');const downloaded=new Promise(resolve=>browser.webContents.session.once('will-download',(_e,item)=>{item.setSavePath(destination);item.once('done',(_e,state)=>resolve(state));}));await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('details.group button')).find(b=>b.textContent.includes('remote-yield.json')).click()");assert.equal(await downloaded,'completed');assert.equal(JSON.parse(fs.readFileSync(destination)).total_units,4);
  // B's actual browser opens the preview, then resolves original files on A.
  await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('#content button')).find(b=>b.textContent==='代碼預覽').click()");
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("!!document.querySelector('.report-code-preview table')"))break;await delay(100);}
- const auditState=await rpc(0,'gui.snapshot');const auditDialog=auditState.dialogs.find(d=>d.title==='성적서 코드 미리보기');assert(auditDialog);const codeTable=walk(auditDialog.content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(codeTable.rows.map(r=>r.slice(0,2)),[['UNKNOWN','1'],['1111','1']]);
- await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).find(r=>r.firstChild.textContent==='1111').firstChild.click()");
+ const auditState=await rpc(0,'gui.snapshot');const auditDialog=auditState.dialogs.find(d=>d.title==='성적서 코드 미리보기');assert(auditDialog);const codeTable=walk(auditDialog.content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(codeTable.rows.map(r=>r.slice(0,2)),[['UNKNOWN','1'],['OT06','1']]);
+ await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).find(r=>r.firstChild.textContent==='OT06').firstChild.click()");
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources pre')).some(p=>p.textContent.includes('ivs_1=\"1111\"'))"))break;await delay(100);}
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources pre')).some(p=>p.textContent.includes('ivs_1=\"1111\"')&&p.textContent.includes('단일 불량률'))"));
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources pre')).some(p=>p.textContent.includes('▶ L1: TEST-01,1,1'))"));
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources select')).some(p=>p.textContent.includes('수율 계산.xml'))"));
  assert(await browser.webContents.executeJavaScript("document.querySelector('.report-code-preview').textContent.includes('計算當時的分配依據')"));browser.setSize(1640,1240);await delay(200);fs.writeFileSync(path.join(root,'report-code-preview-zh.png'),(await browser.webContents.capturePage()).toPNG());
- for(const code of ['1111','UNKNOWN']){
+ for(const code of ['UNKNOWN']){
   let state=await rpc(0,'gui.snapshot'),widgets=walk(state.dialogs.find(d=>d.id===auditDialog.id).content);
   const codes=widgets.find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');
   await rpc(0,'gui.action',{id:codes.id,action:'table',row:codes.rows.findIndex(r=>r[0]===code),column:0});
@@ -76,13 +76,47 @@ app.whenReady().then(async()=>{try{
   const units=widgets.find(w=>w.type==='table'&&w.headers[0]==='StripID');await rpc(0,'gui.action',{id:units.id,action:'table',row:0,column:0});
   await rpc(0,'gui.action',{id:widgets.find(w=>w.type==='button'&&w.text==='선택 좌표 분류').id,action:'click'});
  }
- const reviewed=await rpc(0,'gui.snapshot'),reviewedCodes=walk(reviewed.dialogs.find(d=>d.id===auditDialog.id).content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(reviewedCodes.rows.map(r=>r.slice(0,2)),[['SM03','2']]);
+ const reviewed=await rpc(0,'gui.snapshot'),reviewedCodes=walk(reviewed.dialogs.find(d=>d.id===auditDialog.id).content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(reviewedCodes.rows.map(r=>r.slice(0,2)),[['OT06','1'],['SM03','1']]);
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("document.querySelector('.report-review')?.textContent.includes('未分類代碼檢查及分類')"))break;await delay(50);}
  assert(await browser.webContents.executeJavaScript("document.querySelector('.report-review').textContent.includes('分類所選座標')"));
  await browser.webContents.executeJavaScript("(async()=>{snapshot=await window.studio.snapshot();paint(true);})()");
- assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).some(r=>r.cells[0].textContent==='SM03'&&r.cells[1].textContent==='2')"));await delay(250);
+ assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).some(r=>r.cells[0].textContent==='SM03'&&r.cells[1].textContent==='1')"));await delay(250);
  fs.writeFileSync(path.join(root,'report-review-zh.png'),(await browser.webContents.capturePage()).toPNG());
  await rpc(0,'gui.action',{id:auditDialog.id,action:'reject'});
+ const yieldButtons=walk((await rpc(0,'gui.snapshot')).root).filter(w=>w.type==='button');
+ const ot14Button=yieldButtons.find(w=>w.text==='OT14 좌표·RPT 원본 보기');
+ await rpc(0,'gui.action',{id:ot14Button.id,action:'click'});
+ const ot14Dialog=(await rpc(0,'gui.snapshot')).dialogs.find(d=>d.title==='OT14 좌표·RPT 원본 보기');
+ assert(ot14Dialog);
+ assert(walk(ot14Dialog.content).some(w=>w.type==='table'&&w.headers.includes('OT14 반영')));
+ await rpc(0,'gui.action',{id:ot14Dialog.id,action:'reject'});
+ const csvButton=yieldButtons.find(w=>w.text==='OT14 좌표·RPT 원본 CSV');
+ const csvExport=rpc(0,'gui.action',{id:csvButton.id,action:'click'});
+ let csvSave;
+ for(let n=0;n<100;n++){
+  csvSave=(await api(0,'/api/events')).events.find(e=>e.event==='dialog'&&e.dialog.kind==='save')?.dialog;
+  if(csvSave)break;
+  await delay(50);
+ }
+ assert(csvSave);
+ await rpc(0,'dialog.reply',{id:csvSave.id,value:'OT14_audit.csv'});
+ for(let n=0;n<100;n++){
+  const saved=(await api(0,'/api/events')).events.find(e=>e.event==='dialog'&&e.dialog.kind==='message'&&e.dialog.id>csvSave.id)?.dialog;
+  if(saved){await rpc(0,'dialog.reply',{id:saved.id,value:1024});break;}
+  await delay(50);
+ }
+ await csvExport;
+ for(let n=0;n<100;n++){
+  if(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('details button')).some(b=>b.textContent==='直接檢視 CSV')"))break;
+  await delay(80);
+ }
+ await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('details button')).find(b=>b.textContent==='直接檢視 CSV').click()");
+ for(let n=0;n<100;n++){
+  if(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.modal pre')).some(p=>p.textContent.includes('rpt_occurrences'))"))break;
+  await delay(50);
+ }
+ assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.modal pre')).some(p=>p.textContent.includes('rpt_occurrences'))"));
+ await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.modal')).find(m=>m.querySelector('h2')?.textContent==='OT14_audit.csv').querySelector('.modal-head button').click()");
  assert.equal(await browser.webContents.executeJavaScript("localStorage.getItem('dmt-access-key')!==null"),true);
  // An already open B browser should recover after A restarts with the same
  // port and key. A reload clears stale widget IDs and old dialog events.

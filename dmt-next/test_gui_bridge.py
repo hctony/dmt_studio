@@ -548,8 +548,8 @@ class GuiTests(unittest.TestCase):
         tab.vrs_txt_in.setText(str(txt));tab.strip_json_in.setText(str(ids));tab.ivs_json_in.setText(str(ivs));tab.ski_in.setText(str(ski));tab.units_per_strip_in.setText('4');tab.xout_limit_in.setText('3')
         self.action(tab.btn_calc,'click');self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
         try:
-            self.assertEqual(dict(dialog.codes),{'UNKNOWN':1,'1111':1})
-            index=next(i for i,item in enumerate(dialog.codes) if item[0]=='1111')
+            self.assertEqual(dict(dialog.codes),{'UNKNOWN':1,'OT06':1})
+            index=next(i for i,item in enumerate(dialog.codes) if item[0]=='OT06')
             self.action(dialog.code_table,'table',row=index,column=0)
             end=time.monotonic()+3
             while 'ivs_1="1111"' not in dialog.xml_view.toPlainText() and time.monotonic()<end:self.app.processEvents();time.sleep(.01)
@@ -582,9 +582,32 @@ class GuiTests(unittest.TestCase):
         self.answers['save']=str(self.root/'forbidden.txt');page.export_txt()
         self.assertFalse((self.root/'forbidden.txt').exists())
 
+    def test_ot14_preview_shows_coordinates_and_exact_rpt_lines(self):
+        from core.yield_calc import calculate_yield_summary_by_process
+        txt, _ids = self.fixture()
+        rpt = self.root / 'rpt'
+        rpt.mkdir()
+        (rpt / 'RX1234-01.rpt').write_text('X:001 Y:001 = 1 - BBT\n')
+        tab = self.tab(6)
+        for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):
+            getattr(tab,field).clear()
+        tab.summary = calculate_yield_summary_by_process([txt],[],[],[],None,4,3,rpt)
+        with patch.dict(os.environ,{'DMT_REMOTE_SESSION':'1','DMT_ALLOWED_ROOTS':json.dumps([str(self.root)])}):
+            self.action(tab.btn_ot14_preview,'click')
+            dialog = tab.ot14_preview
+            try:
+                self.assertEqual(dialog.table.rowCount(),1)
+                self.assertEqual(dialog.table.item(0,3).text(),'1')
+                self.action(dialog.kind,'select',2)
+                self.assertEqual(dialog.table.item(0,6).text(),'X:001 Y:001 = 1 - BBT')
+                self.action(dialog.strip_filter,'input','OTHER')
+                self.assertEqual(dialog.table.rowCount(),0)
+            finally:
+                dialog.reject()
+
     def test_report_mismatch_guard_ignores_radio_filter_and_review_allows_export(self):
         from core.report_review import mismatch_rows
-        txt,ids=self.fixture();txt.write_text(txt.read_text().replace('SM03','1111'))
+        txt,ids=self.fixture();txt.write_text(txt.read_text().replace('SM03','UNKNOWN'))
         ski=self.root/'final.ski';ski.write_text('RX1234-01,1,1\n')
         tab=self.tab(6)
         for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in','skipdata_in','ski_in'):getattr(tab,field).clear()
@@ -592,7 +615,7 @@ class GuiTests(unittest.TestCase):
         target=self.root/'report.xlsx';self.answers['save']=str(target)
         with patch('core.report_review.DATA_DIR',self.root):
             self.action(tab.btn_calc,'click')
-            self.assertTrue(any('UNKNOWN, 1111은' in d.get('text','') for k,d in self.dialogs if k=='message'))
+            self.assertTrue(any('UNKNOWN은' in d.get('text','') for k,d in self.dialogs if k=='message'))
             self.action(tab.btn_export_excel,'click');self.assertFalse(target.exists())
             self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
             try:

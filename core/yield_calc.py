@@ -1373,11 +1373,13 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
         ).items()
     }
 
+    from core.report_codes import excel_code
     by_code: dict[str, dict] = {}
     for key, count in process_code_distribution.items():
         process, code = key.split(":", 1) if ":" in key else ("", key)
         if process == "BBT":
             continue
+        code = excel_code(code)
         row = by_code.setdefault(code, {"count": 0, "process_breakdown": {}})
         row["count"] += count
         if process:
@@ -1391,6 +1393,7 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
             "process_breakdown": dict(sorted(row["process_breakdown"].items())),
         }
     for code, count in existing_bbt_codes.items():
+        code = excel_code(code)
         row = final_by_code.setdefault(
             code,
             {"count": 0, "percent_of_total_units": 0.0, "process_breakdown": {}},

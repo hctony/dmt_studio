@@ -34,17 +34,17 @@ class ReviewTests(unittest.TestCase):
         book=load_workbook(output);sheet=book.active
         self.assertEqual([sheet[c].value for c in ('F3','G3','H3','H8','H9','H10','H11')],[7,6,1,1,8,2,0])
         self.assertNotIn('OT14',[c.value for c in sheet[1]]);self.assertIn('SUM(',sheet['H6'].value);book.close()
-    def test_unknown_and_1111_block_export_and_9999_review_remains_optional(self):
+    def test_unknown_blocks_export_and_1111_maps_to_ot06(self):
         summary=self.fixture();before=self.txt.read_bytes();output=self.root/'blocked.xlsx'
-        self.assertEqual(unresolved_counts(summary),{'1111':1,'UNKNOWN':1})
+        self.assertEqual(unresolved_counts(summary),{'UNKNOWN':1})
         self.assertTrue(export_issues(summary));self.assertFalse(export_report_to_2xlsx(build_yield_report_aggregation(summary),'',str(output))['success']);self.assertFalse(output.exists())
-        for code in ('1111','UNKNOWN','9999'):classify(summary,trace_rows(summary['report_trace'],code)[0],'SM03','Inspected XML and SKI')
+        for code in ('UNKNOWN','9999'):classify(summary,trace_rows(summary['report_trace'],code)[0],'SM03','Inspected XML and SKI')
         self.assertFalse(unresolved_counts(summary));self.assertFalse(export_issues(summary))
-        report=build_yield_report_aggregation(summary);self.assertEqual(report['final_defects_by_code_including_bbt']['SM03']['count'],3)
-        self.assertEqual(len(report['classifications']),3);self.assertEqual(before,self.txt.read_bytes())
+        report=build_yield_report_aggregation(summary);self.assertEqual(report['final_defects_by_code_including_bbt']['SM03']['count'],2);self.assertEqual(report['final_defects_by_code_including_bbt']['OT06']['count'],1)
+        self.assertEqual(len(report['classifications']),2);self.assertEqual(before,self.txt.read_bytes())
         self.assertTrue(export_report_to_2xlsx(report,'',str(output))['success'])
         from openpyxl import load_workbook
-        book=load_workbook(output);self.assertEqual(book['분류 이력'].max_row,4);book.close()
+        book=load_workbook(output);self.assertEqual(book['분류 이력'].max_row,3);book.close()
     def test_9999_is_exported_without_forced_classification(self):
         from openpyxl import load_workbook
         summary=self.fixture(('9999',));report=build_yield_report_aggregation(summary)
@@ -60,28 +60,28 @@ class ReviewTests(unittest.TestCase):
         summary=self.fixture(('9999',));summary['per_strip_rows'][0]['final_xout']+=1
         self.assertTrue(export_issues(summary))
         output=self.root/'blocked.xlsx';self.assertFalse(export_report_to_2xlsx(build_yield_report_aggregation(summary),'',str(output))['success']);self.assertFalse(output.exists())
-        mixed=self.fixture(('9999','UNKNOWN','1111'));self.assertEqual(unresolved_counts(mixed),{'UNKNOWN':1,'1111':1})
+        mixed=self.fixture(('9999','UNKNOWN','1111'));self.assertEqual(unresolved_counts(mixed),{'UNKNOWN':1})
     def test_saved_review_reloads_only_for_identical_sources_and_can_reset(self):
-        summary=self.fixture(('1111',));classify(summary,trace_rows(summary['report_trace'],'1111')[0],'OT12','Checked')
+        summary=self.fixture(('UNKNOWN',));classify(summary,trace_rows(summary['report_trace'],'UNKNOWN')[0],'OT12','Checked')
         loaded=self.calculate();self.assertFalse(unresolved_counts(loaded));self.assertEqual(loaded['report_code_distribution'],{'OT12':1})
-        reset_classification(loaded);self.assertEqual(unresolved_counts(self.calculate()),{'1111':1})
-        classify(summary,trace_rows(summary['_original_report_trace'],'1111')[0],'SM03','Checked')
+        reset_classification(loaded);self.assertEqual(unresolved_counts(self.calculate()),{'UNKNOWN':1})
+        classify(summary,trace_rows(summary['_original_report_trace'],'UNKNOWN')[0],'SM03','Checked')
         self.txt.write_text(self.txt.read_text()+'\n')
-        self.assertEqual(unresolved_counts(self.calculate()),{'1111':1})
-        with self.assertRaises(ValueError):classify(summary,trace_rows(summary['_original_report_trace'],'1111')[0],'SM03','Checked')
+        self.assertEqual(unresolved_counts(self.calculate()),{'UNKNOWN':1})
+        with self.assertRaises(ValueError):classify(summary,trace_rows(summary['_original_report_trace'],'UNKNOWN')[0],'SM03','Checked')
     def test_selected_coordinate_only_and_input_validation(self):
-        summary=self.fixture(('1111','1111'));rows=trace_rows(summary['report_trace'],'1111')[0]
+        summary=self.fixture(('UNKNOWN','UNKNOWN'));rows=trace_rows(summary['report_trace'],'UNKNOWN')[0]
         for target,note in (('9999','reason'),('UNKNOWN','reason'),('SM03','')):
             with self.assertRaises(ValueError):classify(summary,rows,target,note)
         classify(summary,rows[:1],'OT12','Checked first unit')
-        self.assertEqual(unresolved_counts(summary),{'1111':1});self.assertEqual(summary['report_code_distribution']['OT12'],1)
+        self.assertEqual(unresolved_counts(summary),{'UNKNOWN':1});self.assertEqual(summary['report_code_distribution']['OT12'],1)
     def test_mismatch_gate_uses_raw_table_counts_even_after_ot14_exclusion(self):
         summary=self.fixture(('SM03',),True)
         summary['per_strip_rows'][0]['final_xout']+=1
         self.assertEqual(len(mismatch_rows(summary)),1)
         output=self.root/'blocked.xlsx';self.assertFalse(export_report_to_2xlsx(build_yield_report_aggregation(summary),'',str(output))['success']);self.assertFalse(output.exists())
     def test_classifying_as_ot14_recomputes_metrics_once_and_resets(self):
-        summary=self.fixture(('1111',));classify(summary,trace_rows(summary['report_trace'],'1111')[0],'OT14','Confirmed prior process')
+        summary=self.fixture(('UNKNOWN',));classify(summary,trace_rows(summary['report_trace'],'UNKNOWN')[0],'OT14','Confirmed prior process')
         for _ in range(3):
             report=build_yield_report_aggregation(summary);self.assertEqual((report['total_units'],report['ng_units'],report['ot14_excluded_units']),(7,0,1))
         reset_classification(summary);self.assertEqual((summary['total_units'],summary['defective_units']),(8,1))
@@ -104,8 +104,10 @@ class ReviewTests(unittest.TestCase):
         summary=self.fixture(('SM03',),True)
         other.write_text('X:001 Y:001 = 1 - OT14\nX:002 Y:001 = 1 - OT14\n')
         self.assertFalse(export_issues(summary))
-    def test_legacy_txt_also_traces_codes_and_excludes_ot14(self):
+    def test_legacy_txt_also_traces_1111_as_ot06_and_excludes_ot14(self):
         summary=self.fixture(('1111',),True,legacy=True)
-        self.assertEqual((summary['total_units'],summary['defective_units']),(7,1));self.assertEqual(unresolved_counts(summary),{'1111':1})
-        classify(summary,trace_rows(summary['report_trace'],'1111')[0],'SM03','Checked')
+        self.assertEqual((summary['total_units'],summary['defective_units']),(7,1))
         self.assertFalse(unresolved_counts(summary));self.assertFalse(export_issues(summary))
+        report=build_yield_report_aggregation(summary)
+        self.assertEqual(report['final_defects_by_code_including_bbt']['OT06']['count'],1)
+        self.assertEqual(trace_rows(summary['report_trace'],'OT06')[0][0]['code'],'1111')

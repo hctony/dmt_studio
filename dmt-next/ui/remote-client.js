@@ -14,7 +14,38 @@
  const emit=e=>listeners.forEach(fn=>fn(e));
  function saveBlob(blob,name){const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),10000);}
  async function downloadFile(name){const data=await(await request('/api/download-ticket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})).json();const a=document.createElement('a');a.href='/api/file?ticket='+encodeURIComponent(data.ticket);a.download=name.split('/').pop();a.click();}
- async function refreshFiles(){try{const files=await (await request('/api/files')).json();if(!downloadPanel){downloadPanel=document.createElement('details');downloadPanel.className='group';document.getElementById('content').before(downloadPanel);}const summary=document.createElement('summary');summary.textContent=text('내 결과 다운로드','下載我的結果')+` (${files.length})`;downloadPanel.replaceChildren(summary);const archive=document.createElement('button');archive.textContent=text('결과 전체 ZIP 다운로드','下載全部結果 ZIP');archive.disabled=archiving||!files.length;archive.onclick=async()=>{archiving=true;archive.disabled=true;try{const result=await(await request('/api/archive',{method:'POST'})).json();await downloadFile(result.name);}catch(e){alert(e.message);}finally{archiving=false;refreshFiles();}};downloadPanel.append(archive);for(const file of files){const button=document.createElement('button');button.textContent=`${file.name} (${Math.ceil(file.size/1024)} KB)`;button.onclick=async()=>{try{await downloadFile(file.name);}catch(e){alert(e.message);}};downloadPanel.append(button);}}catch{}}
+ async function previewCsv(name){
+  const response=await request('/api/download?name='+encodeURIComponent(name));
+  const reader=response.body.getReader(),decoder=new TextDecoder();
+  const limit=512*1024;
+  let content='',size=0,truncated=false;
+  try{
+   while(size<limit){
+    const {value,done}=await reader.read();
+    if(done)break;
+    const chunk=value.subarray(0,limit-size);
+    content+=decoder.decode(chunk,{stream:true});
+    size+=chunk.length;
+    if(size>=limit){truncated=true;break;}
+   }
+  }finally{await reader.cancel().catch(()=>{});}
+  content+=decoder.decode();
+  const body=el('div','column');
+  if(truncated)body.append(el('p','',text('앞부분만 표시합니다. 전체 CSV는 다운로드하세요.','僅顯示前段，請下載完整 CSV。')));
+  const pre=el('pre','text',content);
+  const download=el('button','',text('내 PC에 다운로드','下載至本機'));
+  download.onclick=()=>downloadFile(name).catch(error=>alert(error.message));
+  body.append(pre,download);
+  const overlay=modal(name,body,()=>overlay.remove());
+  document.body.append(overlay);
+ }
+ async function refreshFiles(){try{const files=await (await request('/api/files')).json();if(!downloadPanel){downloadPanel=document.createElement('details');downloadPanel.className='group';document.getElementById('content').before(downloadPanel);}const summary=document.createElement('summary');summary.textContent=text('내 결과 다운로드','下載我的結果')+` (${files.length})`;downloadPanel.replaceChildren(summary);const archive=document.createElement('button');archive.textContent=text('결과 전체 ZIP 다운로드','下載全部結果 ZIP');archive.disabled=archiving||!files.length;archive.onclick=async()=>{archiving=true;archive.disabled=true;try{const result=await(await request('/api/archive',{method:'POST'})).json();await downloadFile(result.name);}catch(e){alert(e.message);}finally{archiving=false;refreshFiles();}};downloadPanel.append(archive);for(const file of files){const button=document.createElement('button');button.textContent=`${file.name} (${Math.ceil(file.size/1024)} KB)`;button.onclick=async()=>{try{await downloadFile(file.name);}catch(e){alert(e.message);}};if(/\.csv$/i.test(file.name)){
+    const row=el('div','row');
+    const preview=el('button','',text('CSV 바로 보기','直接檢視 CSV'));
+    preview.onclick=()=>previewCsv(file.name).catch(error=>alert(error.message));
+    row.append(button,preview);
+    downloadPanel.append(row);
+   }else downloadPanel.append(button);}}catch{}}
  async function poll(){if(!connected)return;try{const data=await (await request('/api/events?after='+sequence)).json();if(generation&&data.generation&&generation!==data.generation){location.reload();return;}generation=data.generation;lastPollError='';sequence=data.seq;for(const event of data.events)emit(event);let notice=document.getElementById('remote-queue');if(!notice){notice=document.createElement('p');notice.id='remote-queue';notice.className='group';document.getElementById('content').before(notice);}notice.textContent=text('클라이언트','用戶端')+' '+data.name+' · '+(data.queue?text('처리 순서를 기다리는 중 — 입력 잠금','排隊中 — 輸入已鎖定'):data.active?text('A PC에서 처리 중','A 電腦處理中'):text('A PC 연결됨','已連接 A 電腦'));if(data.queue){const cancel=document.createElement('button');cancel.textContent=text('대기 취소','取消排隊');cancel.onclick=()=>request('/api/cancel-queued',{method:'POST'});notice.append(cancel);}}catch(e){if(e.status===401){forgetKey();location.reload();return;}if(lastPollError!==e.message){diagnostic('poll-failed',e.message);lastPollError=e.message;}document.getElementById('alert').textContent=text('A PC 연결 확인: ','請確認 A 電腦連線：')+e.message;}finally{setTimeout(poll,1000);}}
  function forgetKey(){
   localStorage.removeItem(keyName);

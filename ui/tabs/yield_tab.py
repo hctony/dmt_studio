@@ -229,6 +229,9 @@ class YieldTab(QWidget):
         self.btn_ot14_csv = QPushButton(_('OT14 좌표·RPT 원본 CSV'))
         self.btn_ot14_csv.clicked.connect(self.export_ot14_csv)
         action_row.addWidget(self.btn_ot14_csv)
+        self.btn_ot14_preview = QPushButton(_('OT14 좌표·RPT 원본 보기'))
+        self.btn_ot14_preview.clicked.connect(self.preview_ot14)
+        action_row.addWidget(self.btn_ot14_preview)
         self.btn_report_template = QPushButton(_("성적서 템플릿 변경"))
         self.btn_report_template.clicked.connect(self.choose_report_template)
         action_row.addWidget(self.btn_report_template)
@@ -489,15 +492,15 @@ class YieldTab(QWidget):
         from core.report_review import unresolved_counts
         pending=unresolved_counts(self.summary)
         if pending:
-            QMessageBox.critical(self,_('미분류 불량 코드'),_('UNKNOWN, 1111은 검토·분류가 필요합니다. 코드 미리보기에서 원본을 확인하고 분류하세요. 9999는 생성 차단 대상에서 제외합니다.')+'\n'+', '.join(f'{c}: {n}' for c,n in pending.items()))
+            QMessageBox.critical(self,_('미분류 불량 코드'),_('UNKNOWN은 검토·분류가 필요합니다. 코드 미리보기에서 원본을 확인하고 분류하세요.')+'\n'+', '.join(f'{c}: {n}' for c,n in pending.items()))
         audit=self.summary.get('its_validation',{})
         if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
             from core.its_validation import format_audits
             QMessageBox.warning(self,_('ITS 검증 미완료'),format_audits(audit)+'\n'+_('소스 누락 또는 SKI 갱신을 확인한 뒤 수율 계산을 다시 실행하세요.'))
 
     def export_ot14_csv(self):
-        if not self.summary:
-            QMessageBox.warning(self,_('입력 오류'),_('수율을 먼저 계산하세요.'));return
+        if not self.report_ready():
+            return
         target,_filter=QFileDialog.getSaveFileName(self,_('OT14 좌표·RPT 원본 CSV'),'OT14_audit.csv','CSV (*.csv)')
         if not target:return
         try:
@@ -506,6 +509,19 @@ class YieldTab(QWidget):
             QMessageBox.information(self,_('저장 완료'),target)
         except Exception as error:
             QMessageBox.warning(self,_('저장 실패'),_('RPT 원본 또는 목록이 변경됐으면 수율을 다시 계산하세요.')+'\n'+str(error))
+
+    def preview_ot14(self):
+        if not self.report_ready():
+            return
+        from core.ot14_audit import rows
+        from ui.ot14_preview import Ot14Preview
+        try:
+            data = rows(self.summary.get('report_trace', {}))
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, _('OT14 좌표·RPT 원본 보기'), _(str(error)))
+            return
+        self.ot14_preview = Ot14Preview(data, self.export_ot14_csv, self)
+        self.ot14_preview.show()
 
     def report_input_values(self):
         names=('model_in','vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in',

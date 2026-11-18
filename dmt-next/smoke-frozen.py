@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory() as data:
         rpc('gui.action',id=buttons['코드 미리보기']['id'],action='click')
         state=rpc('gui.snapshot');dialog=state['dialogs'][0]
         table=next(w for w in walk(dialog['content']) if w['type']=='table' and w['headers'][0]=='성적서 코드')
-        assert [r[:2] for r in table['rows']]==[['UNKNOWN','1'],['1111','1']]
+        assert [r[:2] for r in table['rows']]==[['UNKNOWN','1'],['OT06','1']]
         rpc('gui.action',id=table['id'],action='table',row=1,column=0)
         for attempt in range(100):
             state=rpc('gui.snapshot')
