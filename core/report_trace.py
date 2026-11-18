@@ -7,6 +7,7 @@ REASONS={
  'manual_review':'원본 확인 후 사용자 분류',
  'bbt':'BBT 좌표를 OT14로 배정',
  'dummy9999':'IVS Dummy 9999 양폐: BBT 제외 나머지 좌표',
+ 'dummy_whole_strip':'IVS Dummy 지정 코드 전량 불량: BBT 제외 나머지 좌표',
  'gather':'선택된 공정 TXT 코드',
  'missing_code':'TXT 불량 코드가 비어 있어 UNKNOWN으로 배정',
  'ivs_recovery':'IVS JSON 기록으로 170 코드 보정',
@@ -35,6 +36,8 @@ class ReportTrace:
         self.versions={p:file_version(p) for p in files}
         self.bbt_sources={}
         self.collection_validation={}
+        from core.ot14_audit import manifest
+        self.rpt_audit_versions=manifest(self.bbt_folder)
 
     def set_bbt_sources(self,sources):
         self.bbt_sources=sources
@@ -59,7 +62,8 @@ class ReportTrace:
                 for (strip,code,process,reason),coords in sorted(self.groups.items())],
                 'strips':self.strips,'inputs':self.inputs,'ivs_json_paths':self.ivs_json,
                 'bbt_folder':self.bbt_folder,'bbt_sources':selected_bbt,'ski_path':self.ski,'file_versions':versions,
-                'collection_validation':self.collection_validation}
+                'collection_validation':self.collection_validation,'rpt_audit_versions':self.rpt_audit_versions,
+                'selected_strip_ids':sorted(getattr(self,'selected_strip_ids',self.strips))}
 
 
 def matching_groups(trace,code):

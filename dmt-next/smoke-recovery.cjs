@@ -16,7 +16,7 @@ app.whenReady().then(async()=>{
   delete process.env.DMT_PYTHON;
   await win.webContents.executeJavaScript("[...document.querySelectorAll('#backend-recovery button')].find(b=>b.textContent==='다시 연결').click()");
   for(let i=0;i<80;i++){if(!await win.webContents.executeJavaScript("!!document.getElementById('backend-recovery')"))break;await delay(100);}
-  const state=await win.webContents.executeJavaScript('window.studio.snapshot()');if(state.root.labels.length!==10)throw new Error('Backend recovery failed');
+  const state=await win.webContents.executeJavaScript('window.studio.snapshot()');if(state.root.labels.length!==11)throw new Error('Backend recovery failed');
   console.log(JSON.stringify({backendFailureKeptAppOpen:true,noUpdateKeptAppOpen:true,installCalls:installs,recoveredTabs:10}));app.quit();
  }catch(e){console.error(e);app.exit(1);}
 });

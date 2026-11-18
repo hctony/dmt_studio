@@ -186,7 +186,7 @@ class YieldTab(QWidget):
         form.addRow(_("VRS TXT들"), vrs_row)
         form.addRow(_("FVI TXT들"), fvi_row)
         form.addRow(_("IVS TXT들"), ivs_row)
-        form.addRow(_("IVS JSON들(Dummy 9999 양폐)"), ivs_json_row)
+        form.addRow(_("IVS JSON들(Dummy 지정 코드 양폐)"), ivs_json_row)
         form.addRow(_("생성 TXT들(구 방식)"), txt_row)
         form.addRow("StripID JSON", json_row)
         form.addRow(_("BBT/Skipdata 폴더"), skipdata_row)
@@ -226,6 +226,9 @@ class YieldTab(QWidget):
         self.btn_code_preview = QPushButton(_("코드 미리보기"))
         self.btn_code_preview.clicked.connect(self.preview_report_codes)
         action_row.addWidget(self.btn_code_preview)
+        self.btn_ot14_csv = QPushButton(_('OT14 좌표·RPT 원본 CSV'))
+        self.btn_ot14_csv.clicked.connect(self.export_ot14_csv)
+        action_row.addWidget(self.btn_ot14_csv)
         self.btn_report_template = QPushButton(_("성적서 템플릿 변경"))
         self.btn_report_template.clicked.connect(self.choose_report_template)
         action_row.addWidget(self.btn_report_template)
@@ -471,7 +474,18 @@ class YieldTab(QWidget):
             QMessageBox.critical(self, _("계산 실패"), str(exc))
             return
         self._report_input_snapshot = self.report_input_values()
+        from core.rework_scope import load as load_scope
+        active_scope=load_scope(self.model_in.text(),self.summary.get('lot_id',''))
+        recorded_scope=self.summary.get('rework_scope',{})
+        signature=lambda s:(bool(s.get('enabled')),s.get('date') if s.get('enabled') else '',bool(s.get('reuse_xml')) if s.get('enabled') else False)
+        if signature(active_scope)!=signature(recorded_scope):
+            self.summary.setdefault('rework_scope_errors',[]).append('REWORK_SCOPE_RECOLLECT_REQUIRED')
+            self.summary.setdefault('report_policy_errors',[]).append('REWORK_SCOPE_RECOLLECT_REQUIRED')
         self.refresh_result()
+        alarms=self.summary.get('dummy_alarms',[])
+        if alarms:
+            from core.dummy_policy import ALARM_LABELS
+            QMessageBox.warning(self,_('Dummy 판정 알람'),'\n'.join(a['strip_id']+' · '+_(ALARM_LABELS.get(a['reason'],a['reason']))+' · '+', '.join(a['codes']) for a in alarms))
         from core.report_review import unresolved_counts
         pending=unresolved_counts(self.summary)
         if pending:
@@ -481,10 +495,23 @@ class YieldTab(QWidget):
             from core.its_validation import format_audits
             QMessageBox.warning(self,_('ITS 검증 미완료'),format_audits(audit)+'\n'+_('소스 누락 또는 SKI 갱신을 확인한 뒤 수율 계산을 다시 실행하세요.'))
 
+    def export_ot14_csv(self):
+        if not self.summary:
+            QMessageBox.warning(self,_('입력 오류'),_('수율을 먼저 계산하세요.'));return
+        target,_filter=QFileDialog.getSaveFileName(self,_('OT14 좌표·RPT 원본 CSV'),'OT14_audit.csv','CSV (*.csv)')
+        if not target:return
+        try:
+            from core.ot14_audit import export_csv
+            export_csv(self.summary.get('report_trace',{}),target)
+            QMessageBox.information(self,_('저장 완료'),target)
+        except Exception as error:
+            QMessageBox.warning(self,_('저장 실패'),_('RPT 원본 또는 목록이 변경됐으면 수율을 다시 계산하세요.')+'\n'+str(error))
+
     def report_input_values(self):
         names=('model_in','vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','txt_in','strip_json_in',
                'skipdata_in','ski_in','units_per_strip_in','xout_limit_in')
-        return tuple(getattr(self,name).text().strip() for name in names)+tuple(self.get_process_filters() or [])
+        from core.rework_scope import load as load_scope
+        return tuple(getattr(self,name).text().strip() for name in names)+tuple(self.get_process_filters() or [])+(json.dumps(load_scope(self.model_in.text(),self.summary.get('lot_id','')),sort_keys=True),)
 
     def report_ready(self):
         if not self.summary:
@@ -749,6 +776,11 @@ class YieldTab(QWidget):
             if summary.get('its_validation',{}).get('enabled'):
                 from core.its_validation import format_audits
                 self.result.append('\n'+format_audits(summary['its_validation']))
+            from core.inspection_coverage import LABELS
+            coverage=summary.get('inspection_coverage',[])
+            if coverage:self.result.append('\n'+_('공정별 검사 이력 검증')+'\n'+'\n'.join(
+                row['strip_id']+(' · '+_('RPT에만 있음 · 집계 범위 밖') if not row.get('required_result',True) else '')+' · '+
+                ', '.join(p+': '+_(LABELS[s]) for p,s in row['processes'].items()) for row in coverage))
             return
         self.result.setPlainText(
             f"LOT: {summary['lot_id']}\n"
@@ -761,8 +793,8 @@ class YieldTab(QWidget):
             f"양품 Strip: {summary['good_strips']}개\n"
             f"양폐 Strip(합산 X-out = Unit): {summary['bad_strips']}개\n"
             f"양폐 Strip Unit: {summary.get('scrap_units', summary['bad_strips'] * summary['units_per_strip'])}개\n"
-            f"IVS Dummy 9999 양폐 Strip: {summary.get('ivs_dummy_9999_scrap_strip_count', 0)}개\n"
-            f"IVS Dummy 9999 양폐 Unit: {summary.get('ivs_dummy_9999_scrap_units', 0)}개\n"
+            f"IVS Dummy 지정 코드 양폐 Strip: {summary.get('ivs_dummy_9999_scrap_strip_count', 0)}개\n"
+            f"IVS Dummy 지정 코드 양폐 Unit (BBT 제외): {summary.get('dummy_whole_strip_units', 0)}개\n"
             f"양품 Strip 내 불량 Unit(SKI 기준): {summary.get('good_strip_defective_units', 0)}개\n"
             f"혼입 StripID: {len(summary['mixed_strips'])}개\n"
             f"중복 StripID: {len(summary['duplicate_strips'])}개\n"
@@ -863,7 +895,7 @@ class YieldTab(QWidget):
             f"{_('OK 유닛 비율')}: {report.get('ok_unit_aggregation', {}).get('ok_unit_percent', 0)}%",
             f"{_('기존 BBT 불량 수량(OT14)')}: {report.get('existing_bbt_ot14_units', 0)}",
             f"{_('실제 검사 SM03 수량')}: {report.get('real_sm03_units', 0)}",
-            f"{_('Dummy 9999 패스 SM03 수량(BBT 제외)')}: {report.get('dummy_9999_sm03_units', 0)}",
+            f"{_('Dummy 지정 코드 전량 불량 수량(BBT 제외)')}: {summary.get('dummy_whole_strip_units', 0)}",
             f"{_('x-out 초과 170 수량')}: {report.get('xout_over_170_units', 0)}",
             f"{_('SKI 기준 불량 유닛 수')}: {report.get('ski_defect_units', 0)}",
             f"{_('최종 불량명 합계 - SKI 차이')}: {report.get('final_vs_ski_delta', 0)}",
@@ -906,8 +938,8 @@ class YieldTab(QWidget):
             f"양품 Strip: {summary['good_strips']}개\n"
             f"양폐 Strip(합산 X-out = Unit): {summary['bad_strips']}개\n"
             f"양폐 Strip Unit: {summary.get('scrap_units', summary['bad_strips'] * summary['units_per_strip'])}개\n"
-            f"IVS Dummy 9999 양폐 Strip: {summary.get('ivs_dummy_9999_scrap_strip_count', 0)}개\n"
-            f"IVS Dummy 9999 양폐 Unit: {summary.get('ivs_dummy_9999_scrap_units', 0)}개\n"
+            f"IVS Dummy 지정 코드 양폐 Strip: {summary.get('ivs_dummy_9999_scrap_strip_count', 0)}개\n"
+            f"IVS Dummy 지정 코드 양폐 Unit (BBT 제외): {summary.get('dummy_whole_strip_units', 0)}개\n"
             f"양품 Strip 내 불량 Unit(SKI 기준): {summary.get('good_strip_defective_units', 0)}개\n"
             f"BBT 기존 불량 Unit: {summary['bbt_units']}개\n"
             f"BBT 기존 불량 Strip: {summary.get('bbt_strip_count', 0)}개\n"
@@ -1036,6 +1068,10 @@ class YieldTab(QWidget):
         )
 
     def append_ivs_dummy_9999_validation_summary(self, summary: dict) -> None:
+        if summary.get('dummy_codes'):
+            self.result.append('\n'+_('Dummy 전량 불량 코드')+'\n'+'\n'.join(
+                strip+': '+code for strip,code in sorted(summary['dummy_codes'].items())))
+            return
         validation = summary.get("ivs_dummy_9999_validation") or {}
         if not validation or not validation.get("candidate_strips"):
             return

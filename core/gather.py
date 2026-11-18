@@ -390,29 +390,37 @@ def load_latest_process_blocks(
     selected_sources: dict[str, str] | None = None,
     its_history: dict | None = None,
     ski_time: float = 0,
+    rework_scope: dict | None = None,
 ) -> tuple[dict[str, GatherStrip], int]:
     merged: dict[str, GatherStrip] = {}
     replaced_count = 0
     for txt_path in sorted(txt_paths, key=lambda path: (path.stat().st_mtime, str(path))):
         parsed = parse_gather_file(txt_path, lot_id)
         from core.its_validation import source_clock_map
-        clocks=source_clock_map(txt_path) if its_history else None
+        clocks=source_clock_map(txt_path)
         for strip_id, item in parsed.items():
             candidate = clone_gather_strip(item)
             epoch=(its_history or {}).get(strip_id.upper())
+            from core.rework_scope import cutoff, txt_timestamp
+            if rework_scope and rework_scope.get('reuse_xml'):epoch=None
+            metadata=clocks.get(strip_id.upper()) if clocks is not None else None
+            if metadata:candidate.source_mtime=metadata['source_mtime']
+            elif clocks is None:candidate.source_mtime=txt_timestamp(txt_path,candidate.lot,candidate.source_mtime)[0]
+            elif epoch or cutoff(rework_scope or {}):continue
+            if candidate.source_mtime<cutoff(rework_scope or {}):continue
             if epoch:
                 metadata=clocks.get(strip_id.upper()) if clocks is not None else {'source_mtime':candidate.source_mtime}
                 if not metadata or metadata.get('source_mtime',0)<epoch['epoch_start']:continue
                 candidate.source_mtime=metadata['source_mtime']
             target = merged.get(strip_id.upper())
-            if target is not None and epoch:
+            if target is not None and epoch and not (rework_scope or {}).get('enabled'):
                 from core.its_validation import epoch_candidate
                 candidate=epoch_candidate(target,candidate,(bbt_map or {}).get(strip_id,set()),(ski_map or {}).get(strip_id,set()),ski_time)
             if target is None:
                 merged[strip_id.upper()] = candidate
                 if selected_sources is not None:
                     selected_sources[strip_id.upper()] = str(txt_path)
-            elif (candidate.source_mtime>=target.source_mtime if epoch else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)):
+            elif (candidate.source_mtime>=target.source_mtime if epoch or (rework_scope or {}).get('enabled') else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)):
                 candidate.sources = unique_lines(target.sources + candidate.sources)
                 candidate.replaced_count += target.replaced_count + 1
                 merged[strip_id.upper()] = candidate

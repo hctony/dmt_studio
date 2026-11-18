@@ -520,6 +520,7 @@ def _calculate_yield_summary_many(
     ski_path: Path | None = None,
     ivs_dummy_scrap_strips: set[str] | None = None,
 ) -> dict:
+    dummy_codes=getattr(ivs_dummy_scrap_strips,'codes',{})
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     skipdata = load_skipdata_folder(skipdata_path)
     ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
@@ -548,9 +549,13 @@ def _calculate_yield_summary_many(
         set(blocks),
     )
     ivs_dummy_scrap_strips = set(dummy_9999_validation["applied_strips"])
+    if dummy_codes:
+        ivs_dummy_scrap_strips=set(dummy_codes)
+        dummy_9999_validation['applied_strips']=sorted(dummy_codes)
     observed_strip_ids = set(blocks) | ivs_dummy_scrap_strips
     population_ids = verified_population_ids(strip_json_path, units_per_strip)
     expected_strip_ids = observed_strip_ids | population_ids
+    legacy_trace.selected_strip_ids=expected_strip_ids
     lot_id = lot_id_from_blocks(blocks.values(), json_lot_id)
     total_strips = len(expected_strip_ids)
     total_units = production_units(total_strips, units_per_strip)
@@ -629,7 +634,7 @@ def _calculate_yield_summary_many(
             'processes':{'VRS':{'defect_lines':block.defect_lines if block else [],'sources':sorted(block.source_files) if block else []}},'ivs_records':[]}
         for coord in targets:
             if coord in bbt_coords:code,process,reason='OT14','BBT','bbt'
-            elif is_ivs_dummy_scrap:code,process,reason='SM03_DUMMY9999','IVS','dummy9999'
+            elif is_ivs_dummy_scrap:code,process,reason=dummy_codes.get(strip_id,'SM03_DUMMY9999'),'IVS','dummy_whole_strip'
             else:
                 code=codes.get(coord,'170' if is_scrap else 'UNKNOWN');process='VRS';reason='gather' if coord in codes else 'xout_fill' if is_scrap else 'ski_unassigned'
             legacy_trace.add(strip_id,code,process,coord,reason)
@@ -816,14 +821,25 @@ def _calculate_yield_summary_by_process(
     from core.collection import reports_for_inputs
     collection_validation=reports_for_inputs(list(vrs_paths)+list(fvi_paths)+list(ivs_paths or []),{'VRS':vrs_paths,'FVI':fvi_paths,'IVS':ivs_paths or []})
     its_history=load_history(ivs_json_paths or [])
+    scopes=[r.get('rework_scope',{}) for r in collection_validation.get('reports',[])]
+    rework_scope=next((s for s in scopes if s.get('enabled')), {})
+    scope_errors=[]
+    if rework_scope:
+        signature=lambda s:(bool(s.get('enabled')),s.get('date'),bool(s.get('reuse_xml')))
+        if any(signature(s)!=signature(rework_scope) for s in scopes):scope_errors.append('REWORK_SCOPE_MISMATCH')
+        if not rework_scope.get('reuse_xml'):
+            for source in ivs_json_paths or []:
+                saved=json.loads(source.read_text(encoding='utf-8-sig')).get('rework_scope',{})
+                if signature(saved)!=signature(rework_scope):scope_errors.append('IVS_XML_REWORK_SCOPE_MISMATCH')
     retired_ivs={}
     for strip,epoch in its_history.items():
         def is_current(record):
             return (record.machine,record.trial)==(epoch['machine'],epoch['trial']) and (not epoch.get('strip_folder') or record.strip_folder==epoch['strip_folder'])
         retired_ivs[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if not is_current(r)]
         ivs_records_by_strip[strip]=[r for r in ivs_records_by_strip.get(strip,[]) if is_current(r)]
-    if its_history:
-        ivs_dummy_scrap_strips={strip for strip,items in ivs_records_by_strip.items() if any(r.is_dummy_9999 for r in items)}
+    from core.dummy_policy import evaluate
+    dummy_codes,dummy_alarms=evaluate(ivs_records_by_strip)
+    ivs_dummy_scrap_strips=set(dummy_codes)
     process_priority = ["IVS", "VRS", "FVI"]
     process_inputs = {
         "VRS": vrs_paths,
@@ -842,7 +858,7 @@ def _calculate_yield_summary_by_process(
             continue
         selected = {}
         blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected, its_history,
-            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0) if paths else ({}, 0)
+            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0,rework_scope) if paths else ({}, 0)
         process_selected_sources[process] = selected
         process_blocks[process] = blocks
         process_replaced[process] = replaced
@@ -854,9 +870,23 @@ def _calculate_yield_summary_by_process(
         gather_strip_ids,
     )
     ivs_dummy_scrap_strips = set(dummy_9999_validation["applied_strips"])
+    ivs_dummy_scrap_strips=set(dummy_codes)
+    dummy_9999_validation['applied_strips']=sorted(dummy_codes)
+    dummy_9999_validation['recovered_strips']=[]
+    dummy_9999_validation['codes']=dummy_codes
+    for detail in dummy_9999_validation.get('details',[]):
+        detail['status']=_('최신 XML Dummy 지정 코드 적용 · SKI 좌표 검증 필요')
+        detail['code']=dummy_codes.get(detail['strip_id'],'')
     observed_strip_ids = gather_strip_ids | ivs_dummy_scrap_strips
     population_ids = verified_population_ids(strip_json_path, units_per_strip)
     expected_strip_ids = observed_strip_ids | population_ids
+    report_trace.selected_strip_ids=expected_strip_ids
+    from core.inspection_coverage import build as build_coverage
+    required_coverage=expected_strip_ids|set(its_history)|set(ivs_records_by_strip)
+    rpt_coverage={strip for strip in bbt_map if not json_lot_id or strip.startswith(json_lot_id.upper())}
+    coverage=build_coverage(required_coverage|rpt_coverage,
+                            {p:process_blocks.get(p,{}) for p in ('IVS','VRS','FVI')})
+    for row in coverage:row['required_result']=row['strip_id'] in required_coverage
     lot_id = lot_id_from_blocks(
         [block for blocks in process_blocks.values() for block in blocks.values()],
         json_lot_id,
@@ -949,7 +979,7 @@ def _calculate_yield_summary_by_process(
                 and not pending.intersection(raw.get('VRS',{}).get('9998',())))
             source_present='IVS' in raw or not ivs_records_by_strip.get(strip_id)
             if strip_id in ivs_dummy_scrap_strips:
-                raw['IVS']={'SM03_DUMMY9999':full_unit_coords(x_count_for_strip,units_per_strip//x_count_for_strip)}
+                raw['IVS']={dummy_codes[strip_id]:full_unit_coords(x_count_for_strip,units_per_strip//x_count_for_strip)}
             audit=validate_strip(raw,bbt_coords,ski_coords_for_strip,history_verified=reviewed and source_present and xml_mapping_valid,
                 ski_scope_verified=bool(ski_path and ski_path.is_file()),inspection_times=stamps,
                 ski_time=ski_path.stat().st_mtime if ski_path and ski_path.is_file() else None,
@@ -960,7 +990,7 @@ def _calculate_yield_summary_by_process(
         if is_ivs_dummy_scrap:
             full_coords = full_unit_coords(x_count_for_strip, units_per_strip // x_count_for_strip) if x_count_for_strip else set()
             by_process_code.setdefault("IVS", {})
-            by_process_code["IVS"] = {"SM03": full_coords}
+            by_process_code["IVS"] = {dummy_codes[strip_id]: full_coords}
             merged_by_code = defaultdict(set)
             for by_code in by_process_code.values():
                 merge_code_coords(merged_by_code, by_code)
@@ -1051,7 +1081,7 @@ def _calculate_yield_summary_by_process(
         if is_ivs_dummy_scrap:
             for coord in sorted(report_remaining, key=lambda item: (item[1], item[0])):
                 x, y = coord
-                report_trace.add(strip_id,'SM03_DUMMY9999','IVS',(x,y),'dummy9999')
+                report_trace.add(strip_id,dummy_codes[strip_id],'IVS',(x,y),'dummy_whole_strip')
             report_remaining.clear()
         recovered_ivs_coords = set()
         if is_scrap and not is_ivs_dummy_scrap:
@@ -1230,12 +1260,14 @@ def _calculate_yield_summary_by_process(
     }
     merged_process_defect_distribution = merge_process_code_distribution(process_code_distribution)
     split_added_distribution = split_170_added_distribution(process_code_distribution)
-    dummy_9999_sm03_units = sum(
-        max(units_per_strip - len(bbt_map.get(strip_id, set())), 0)
-        for strip_id in ivs_dummy_scrap_strips
-    )
+    dummy_9999_sm03_units = 0  # obsolete synthetic code; new codes retain their exact identity
     return {
         "mode": "process",
+        "dummy_codes":dummy_codes,
+        "dummy_alarms":dummy_alarms,
+        "inspection_coverage":coverage,
+        "rework_scope":rework_scope,
+        "rework_scope_errors":scope_errors,
         "lot_id": lot_id,
         "total_strips": len(expected_strip_ids),
         "units_per_strip": units_per_strip,

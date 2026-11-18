@@ -87,10 +87,10 @@ def indexed_blocks(file,lot):
                 source_mtime=file['mtime_ns']/1e9,source_order=order) for order,payload in rows for b in [json.loads(payload)]]
 
 
-def collect(paths,days,lot,mode,should_stop,progress,force=False):
+def collect(paths,days,lot,mode,should_stop,progress,force=False,scope=None):
     run_id=uuid.uuid4().hex
     report={'schema':'dmt-collection-v1','id':run_id,'mode':mode,'lot':lot,'hosts':[],
-            'complete':False,'started_at':time.time(),'engine':'go'}
+            'complete':False,'started_at':time.time(),'engine':'go','rework_scope':scope or {}}
     parsed={};job_id=None;cancelled=False
     try:
         if should_stop():raise OperationCancelled()
@@ -122,10 +122,19 @@ def collect(paths,days,lot,mode,should_stop,progress,force=False):
             files=sorted(host.get('files') or [],key=lambda f:(f['mtime_ns'],f['path']))
             for position,file in enumerate(files,1):
                 if should_stop():raise OperationCancelled()
-                try:items.extend((Path(file['path']),item) for item in indexed_blocks(file,lot))
+                try:
+                    from core.rework_scope import cutoff, txt_timestamp
+                    if txt_timestamp(file['path'],lot,file['mtime_ns']/1e9)[0] < cutoff(scope or {}):
+                        host['scope_excluded']=host.get('scope_excluded',0)+1
+                        continue
+                    blocks=indexed_blocks(file,lot)
+                    if blocks:
+                        from core.inspection_history import record_file
+                        record_file(file,lot,mode)
+                    items.extend((Path(file['path']),item) for item in blocks)
                 except Exception as error:failed.append({'path':file['path'],'error':str(error)})
                 if position==1 or position%100==0 or position==len(files):progress(f"[INDEX] {path} · {position}/{len(files)} TXT")
-            host['parse_errors']=failed;host['processed']=len(host.get('files') or [])-len(failed)
+            host['parse_errors']=failed;host['processed']=len(host.get('files') or [])-len(failed)-host.get('scope_excluded',0)
             host['matched_strips']=len({item.strip_id for _,item in items})
             if failed:host['state']='incomplete'
             with closing(sqlite3.connect(cache_root()/'collection-index.sqlite',timeout=15)) as db, db:

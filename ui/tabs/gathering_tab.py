@@ -658,6 +658,9 @@ class GatheringTab(QWidget):
         form.addRow(_("최종 SKI 파일"), ski_row)
         layout.addWidget(config)
         
+        from ui.rework_scope_widget import ReworkScopeWidget
+        self.rework_scope = ReworkScopeWidget(self.model_in, self.lot_in)
+        layout.addWidget(self.rework_scope)
         batch_group = QGroupBox(_("공정 일괄 추출"))
         batch_layout = QHBoxLayout(batch_group)
         self.chk_vrs = QCheckBox("VRS")

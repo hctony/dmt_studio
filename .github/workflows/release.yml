@@ -31,6 +31,8 @@ jobs:
       - run: node --test dmt-next/test-updater.cjs dmt-next/test-gui-client.cjs dmt-next/test-lifecycle.cjs dmt-next/test-network-server.cjs dmt-next/test-diagnostics.cjs dmt-next/test-txt-cleanup.cjs
       - run: ./node_modules/.bin/electron.cmd smoke-tray.cjs
         working-directory: dmt-next
+      - run: ./node_modules/.bin/electron.cmd smoke-desktop.cjs
+        working-directory: dmt-next
       - run: ./node_modules/.bin/electron.cmd smoke-collector.cjs
         working-directory: dmt-next
       - run: ./node_modules/.bin/electron.cmd smoke-cleanup.cjs

@@ -60,6 +60,25 @@ class IvsScanThread(QThread):
         started=time.monotonic()
         try:
             check_cancelled(self._cancel.is_set)
+            from core.rework_scope import load as load_scope, cutoff
+            requested=parse_trial_context(self.trial_path) if self.trial_path.strip() else None
+            scope_model=requested.model if requested else self.model
+            scope_lot=requested.lot if requested else self.lot
+            scope=load_scope(scope_model,scope_lot)
+            if scope.get('enabled') and scope.get('reuse_xml'):
+                from core.yield_handoff import context
+                from core.ivs import latest_payload
+                import json
+                source=context(scope_model,scope_lot).get('fields',{}).get('ivs_json_in',{}).get('value')
+                if not source or not Path(source).is_file():
+                    raise ValueError(_('유지할 IVS JSON이 없습니다. 기존 JSON을 먼저 열어 주세요.'))
+                payload=latest_payload(json.loads(Path(source).read_text(encoding='utf-8-sig')))
+                if payload.get('model','').upper()!=scope_model.upper() or payload.get('lot_id','').upper()!=scope_lot.upper():
+                    raise ValueError('IVS_BASELINE_LOT_MISMATCH')
+                payload['rework_scope']=scope
+                payload['reused_xml_baseline']=str(source)
+                self.finished.emit(payload)
+                return
             ssh, sftp = connect()
             connection_seconds=time.monotonic()-started
             self._ssh = ssh
@@ -120,6 +139,16 @@ class IvsScanThread(QThread):
                             strip_history.append({'strip_id':barcode.strip().upper(),'machine':ctx.machine,'trial':ctx.trial,
                                 'strip_folder':strip_folder,'source_xml':xml_path,'source_mtime':stamp,'clock_basis':'source_file_mtime'})
                     xml_files = find_ivs_files(strip_path, sftp) if folder_index(strip_folder) in valid_indexes else []
+                    if cutoff(scope):
+                        selected_xml=[]
+                        for candidate_xml in xml_files:
+                            meta=sftp.metadata(candidate_xml) if getattr(sftp,'_dmt_scan_session',False) is True else sftp.stat(candidate_xml)
+                            if float(meta.st_mtime)>=cutoff(scope):selected_xml.append(candidate_xml)
+                        if xml_files and not selected_xml:
+                            continue
+                        xml_files=selected_xml
+                        # A bare FC file cannot establish a post-reentry inspection.
+                        if not xml_files:continue
                     for xml_path in xml_files:
                         check_cancelled(self._cancel.is_set)
                         self.dmt_progress = {'stage': '현재 Trial 진행률', 'value': folder_index_done, 'max': len(folders), 'detail': f'{detail} · Strip {folder_index_done}/{len(folders)} · XML {xml_count} · {strip_folder}'}
@@ -171,6 +200,7 @@ class IvsScanThread(QThread):
             history_records=records
             records,selection=select_latest(records,strip_history)
             payload = records_to_json(model, lot, records, population)
+            payload['rework_scope']=scope
             payload['history_records']=[asdict(r) for r in history_records]
             payload['latest_selection']=selection
             payload['strip_history']={'schema':'dmt-its-history-v1','complete':not missing_barcodes and not parse_errors and selection['complete'],'events':strip_history}

@@ -239,19 +239,9 @@ def load_records_from_payload(payload: dict, include_history=False) -> list[Defe
 
 
 def load_ivs_dummy_scrap_strips(json_paths: list[Path], lot_id: str = "") -> set[str]:
-    scrap_strips: set[str] = set()
-    lot_key = lot_id.strip().upper()
-    for json_path in json_paths:
-        payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
-        for record in load_records_from_payload(payload):
-            strip_id = record.strip_id.strip().upper()
-            if not strip_id:
-                continue
-            if lot_key and not strip_id.startswith(lot_key):
-                continue
-            if record.is_dummy_9999:
-                scrap_strips.add(strip_id)
-    return scrap_strips
+    from core.dummy_policy import evaluate, ScrapStrips
+    codes, _alarms = evaluate(load_ivs_records_by_strip(json_paths, lot_id))
+    return ScrapStrips(codes)
 
 
 def load_ivs_records_by_strip(json_paths: list[Path], lot_id: str = "", source_paths=None, include_history=False) -> dict[str, list[DefectRecord]]:

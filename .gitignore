@@ -29,3 +29,5 @@ yield_model_settings.json
 **/collection-runs/
 **/report-reviews/
 **/txt-cleanup.json
+**/inspection-history/
+**/rework-scopes/

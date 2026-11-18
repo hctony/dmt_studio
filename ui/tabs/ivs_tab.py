@@ -86,6 +86,9 @@ class IvsStudioTab(QWidget):
         self.force_xml=QCheckBox(_('XML 강제 다시 읽기 (캐시 무시)'))
         form.addRow(self.force_xml)
         root.addWidget(config_box)
+        from ui.rework_scope_widget import ReworkScopeWidget
+        self.rework_scope = ReworkScopeWidget(self.model_in, self.lot_in)
+        root.addWidget(self.rework_scope)
 
         buttons = QHBoxLayout()
         self.btn_scan = QPushButton(_("IVS 스캔"))
@@ -313,6 +316,13 @@ class IvsStudioTab(QWidget):
         remember_payload(payload, 'ivs_json')
         self.refresh_view()
         self.log(_("IVS 스캔 완료"))
+        from core.dummy_policy import evaluate, ALARM_LABELS
+        from collections import defaultdict
+        grouped=defaultdict(list)
+        for record in self.records:grouped[record.strip_id].append(record)
+        codes,alarms=evaluate(grouped)
+        if codes:self.log(_('Dummy 전량 불량 코드')+': '+', '.join(s+': '+c for s,c in sorted(codes.items())))
+        if alarms:QMessageBox.warning(self,_('Dummy 판정 알람'),'\n'.join(a['strip_id']+' · '+_(ALARM_LABELS.get(a['reason'],a['reason'])) for a in alarms))
 
     def on_scan_failed(self, message: str) -> None:
         self.finish_scan_controls()
@@ -368,7 +378,7 @@ class IvsStudioTab(QWidget):
             payload = records_to_json(model, lot, self.records, (getattr(self, 'current_payload', None) or {}).get('population'))
             if (getattr(self,'current_payload',None) or {}).get('strip_history'):
                 payload['strip_history']=self.current_payload['strip_history']
-            for field in ('history_records','latest_selection'):
+            for field in ('history_records','latest_selection','rework_scope','reused_xml_baseline'):
                 if field in (self.current_payload or {}):payload[field]=self.current_payload[field]
             if (getattr(self,'current_payload',None) or {}).get('scan_metrics'):
                 payload['scan_metrics']=self.current_payload['scan_metrics']

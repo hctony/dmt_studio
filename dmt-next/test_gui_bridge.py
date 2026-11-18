@@ -41,17 +41,31 @@ class GuiTests(unittest.TestCase):
         txt=self.root/'gather.txt';txt.write_text('1,RX1234-,RX1234-01\nRX1234-,RX1234-01,1,1,T,SM03\nRX1234-,RX1234-01,EOS\n',encoding='utf-8')
         ids=self.root/'strip.json';ids.write_text(json.dumps({'lot_id':'RX1234-','strip_ids':['RX1234-01']}))
         return txt,ids
-    def test_all_ten_tabs_serialize_original_controls(self):
+    def test_all_eleven_tabs_serialize_original_controls(self):
         def walk(w):
             if not w:return []
             return [w]+sum([walk(c) for c in w.get('children',[])],[])+walk(w.get('content'))
         total=0
-        for i in range(10):
+        for i in range(11):
             self.tab(i);s=self.c.snapshot();nodes=walk(s['root']['content'])
             self.assertTrue(any(w['type']=='button' for w in nodes),i)
             total+=sum(w['type']=='button' for w in nodes)
             self.assertEqual(s['root']['index'],i)
         self.assertGreater(total,45)
+    def test_operator_history_tab_search_selection_and_original_download(self):
+        import hashlib
+        from core.inspection_history import record_file
+        with patch.dict(os.environ,{'DMT_CACHE_DIR':str(self.root/'cache')}):
+            txt,ids=self.fixture();body=txt.read_bytes()
+            record_file(dict(object=str(txt),path=str(self.root/'M_RX1234-_admin_2026-11-18 132845.txt'),
+                sha256=hashlib.sha256(body).hexdigest(),size=len(body),mtime_ns=txt.stat().st_mtime_ns),'RX1234-','VRS')
+            tab=self.tab(10);self.action(tab.strip_in,'input','RX1234-01')
+            self.action(tab.btn_search,'click')
+            self.assertEqual(tab.table.rowCount(),1);self.assertIn('SM03',tab.detail.toPlainText())
+            self.assertEqual(tab.table.item(0,3).text(),'admin')
+            output=self.root/'download.txt';self.answers['save']=str(output)
+            self.action(tab.btn_export,'click');self.assertEqual(output.read_bytes(),body)
+
     def test_yield_original_calculation_and_excel_export(self):
         txt,ids=self.fixture();tab=self.tab(6)
         for field in ('vrs_txt_in','fvi_txt_in','ivs_txt_in','ivs_json_in','skipdata_in','ski_in'):getattr(tab,field).clear()

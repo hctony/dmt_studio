@@ -72,8 +72,14 @@ def prepare_summary(summary):
     else:
         ot14=int((summary.get('existing_bbt_code_distribution') or {}).get('OT14',summary.get('total_bbt_units',0)) or 0)
     summary['ot14_excluded_units']=ot14
+    summary['dummy_whole_strip_units']=sum(len(g['coords']) for g in summary.get('report_trace',{}).get('groups',[]) if g.get('reason')=='dummy_whole_strip')
     total=summary['gross_total_units']-ot14;ng=summary['gross_defective_units']-ot14
     summary['report_policy_errors']=[] if 0<=ng<=total else ['OT14_EXCLUSION_INVALID']
+    summary['report_policy_errors'].extend(summary.get('rework_scope_errors',[]))
+    if any(a['reason']=='DUMMY_CODE_CONFLICT' for a in summary.get('dummy_alarms',[])):
+        summary['report_policy_errors'].append('DUMMY_CODE_CONFLICT')
+    missing=[r['strip_id'] for r in summary.get('inspection_coverage',[]) if r['no_result_block'] and r.get('required_result',True)]
+    if missing:summary['report_policy_errors'].append('NO_INSPECTION_RESULT_BLOCK: '+', '.join(missing))
     summary['total_units']=max(total,0);summary['defective_units']=max(ng,0)
     summary['good_units']=max(total-ng,0)
     summary['unit_yield_percent']=round(summary['good_units']/total*100,4) if total>0 else 0.0

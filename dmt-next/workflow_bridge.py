@@ -39,7 +39,7 @@ class WorkflowBridge:
         busy = self.c.busy()
         if self.was_busy and not busy and self.history.active:
             # Async worker completion is observed, not assumed to be successful.
-            self.history.record('workers_idle', result=[self.result_summary(i) for i in range(10)])
+            self.history.record('workers_idle', result=[self.result_summary(i) for i in range(self.c.window.centralWidget().count())])
         self.was_busy = busy
 
     def recommendations(self, model, lot):

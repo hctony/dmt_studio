@@ -77,7 +77,10 @@ def source_metadata(path,strip):
         data=json.loads(sidecar.read_text(encoding='utf-8'))
         if hashlib.sha256(path.read_bytes()).hexdigest()!=data.get('sha256'):return None
         return data.get('strips',{}).get(strip)
-    return {'source_mtime':path.stat().st_mtime,'sources':[str(path)]}
+    from core.rework_scope import txt_timestamp
+    lot=strip.split('-',1)[0]+'-' if '-' in strip else ''
+    stamp,basis=txt_timestamp(path,lot,path.stat().st_mtime)
+    return {'source_mtime':stamp,'sources':[str(path)],'clock_basis':basis}
 
 
 def source_clock_map(path):

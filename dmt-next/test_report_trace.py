@@ -102,11 +102,11 @@ class ReportTraceTests(unittest.TestCase):
 
     def test_dummy_assignment_counts_bbt_first_and_traces_only_remaining_coordinates(self):
         full=[(1,1),(2,1),(1,2),(2,2)]
-        summary,report=self.fixture([(2,2,'SM03')],full,[self.record('9999',dummy=True)],[(1,1)])
-        self.assertEqual(dict(ordered_report_codes(report)),{'SM03_DUMMY9999':3})
+        summary,report=self.fixture([(2,2,'SM03')],full,[self.record('DR01',dummy=True)],[(1,1)])
+        self.assertEqual(dict(ordered_report_codes(report)),{'DR01':3})
         self.assertEqual(report['ot14_excluded_units'],1)
-        groups=matching_groups(summary['report_trace'],'SM03_DUMMY9999')
-        self.assertEqual(groups[0]['reason'],'dummy9999');self.assertNotIn([1,1],groups[0]['coords'])
+        groups=matching_groups(summary['report_trace'],'DR01')
+        self.assertEqual(groups[0]['reason'],'dummy_whole_strip');self.assertNotIn([1,1],groups[0]['coords'])
         self.assertEqual(trace_rows(summary['report_trace'],'OT14')[0][0]['reason'],'bbt')
 
     def test_pagination_never_repeats_or_loses_assignment_rows(self):

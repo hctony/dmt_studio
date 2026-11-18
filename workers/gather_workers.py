@@ -83,6 +83,9 @@ class GatheringWorker(QThread):
 
     def run(self) -> None:
         try:
+            from core.rework_scope import load as load_scope, cutoff, txt_timestamp
+            scope=load_scope(self.model,self.lot)
+            self.rework_start_timestamp=cutoff(scope)
             merged: dict[str, GatherStrip] = {}
             paths = self.build_paths()
             self.progress.emit(f"{self.mode} 검색 시작: {len(paths)}개 PC 경로")
@@ -107,7 +110,7 @@ class GatheringWorker(QThread):
                 def native_progress(message):
                     self.dmt_progress={'stage':'LOT 인덱스 검증' if message.startswith('[INDEX]') else '호기 수집 및 검증','value':0,'max':0,'detail':message}
                     self.progress.emit(message)
-                parsed_by_path,collection_report=collect(paths,self.lookback_days,self.lot,self.mode,lambda:self._stop,native_progress,force=self.force_recollect)
+                parsed_by_path,collection_report=collect(paths,self.lookback_days,self.lot,self.mode,lambda:self._stop,native_progress,force=self.force_recollect,scope=scope)
                 if self._stop:return
                 for host in collection_report['hosts']:
                     path=Path(host['path']);txt_counts[path]=host.get('found',0)
@@ -161,6 +164,9 @@ class GatheringWorker(QThread):
                     self.progress.emit(f"[CACHE] 메모리 재사용 {search_stats.get('memory_hits',0)} / 디스크 재사용 {search_stats.get('disk_hits',0)} / 새로 읽음 {search_stats.get('remote_reads',0)} / 기간 제외 {search_stats.get('old_skipped',0)}")
 
             # 날짜 비교를 위한 파싱된 모든 아이템 수집
+            for entries in parsed_by_path.values():
+                for source,item in entries:
+                    item.source_mtime=txt_timestamp(source,self.lot,item.source_mtime)[0]
             all_items = [item for items in parsed_by_path.values() for _, item in items]
             from core.its_validation import load_history
             from core.yield_handoff import context
@@ -173,7 +179,7 @@ class GatheringWorker(QThread):
                 unique_dates = {datetime.fromtimestamp(item.source_mtime).strftime("%Y-%m-%d") for item in all_items}
                 from core.its_validation import overlapping_history_dates
                 repeated_dates=overlapping_history_dates(all_items)
-                if len(unique_dates) > 1 and any(strip not in epoch_history for strip in repeated_dates):
+                if not self.rework_start_timestamp and len(unique_dates) > 1 and any(strip not in epoch_history for strip in repeated_dates):
                     self.progress.emit(f"[재작업 체크] 데이터에 여러 날짜가 존재합니다. 사용자 확인 대기 중...")
                     self.date_selection_required.emit(sorted(list(unique_dates)))
                     self.rework_event.wait()
@@ -199,17 +205,18 @@ class GatheringWorker(QThread):
                         continue
                     key = candidate.strip_id.upper()
                     epoch=epoch_history.get(key)
+                    if scope.get('enabled') and scope.get('reuse_xml'):epoch=None
                     if epoch and candidate.source_mtime<epoch['epoch_start']:continue
                     target = merged.get(key)
                     if target is None:
                         merged[key] = candidate
                     else:
-                        if epoch:
+                        if epoch and not scope.get('enabled'):
                             from core.its_validation import epoch_candidate
                             ski_stamp=Path(self.ski_path).stat().st_mtime if self.ski_path and Path(self.ski_path).is_file() else 0
                             candidate=epoch_candidate(target,candidate,bbt_map.get(key,set()),ski_map.get(key,set()),ski_stamp)
-                        if not epoch:duplicate_conflicts.append(build_gather_duplicate_conflict(target, candidate, bbt_map, ski_map))
-                        replace=candidate.source_mtime>=target.source_mtime if epoch else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)
+                        if not epoch and not scope.get('enabled'):duplicate_conflicts.append(build_gather_duplicate_conflict(target, candidate, bbt_map, ski_map))
+                        replace=candidate.source_mtime>=target.source_mtime if epoch or scope.get('enabled') else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)
                         if not replace:
                             target.replaced_count += candidate.replaced_count + 1
                             target.sources = unique_lines(target.sources + candidate.sources)

@@ -15,6 +15,7 @@ from ui.tabs.strip_id_tab import StripIdTab
 from ui.tabs.test_tab import TestTab
 from ui.tabs.yield_tab import YieldTab
 from ui.tabs.inspection_stats_tab import InspectionStatsTab
+from ui.tabs.inspection_history_tab import InspectionHistoryTab
 
 
 class MainWindow(QMainWindow):
@@ -33,6 +34,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(StripDiagnosisTab(), _("StripID 진단"))
         tabs.addTab(LMDataTab(), "LM Data")
         tabs.addTab(TestTab(), _("테스트"))
+        tabs.addTab(InspectionHistoryTab(), _("작업자 검사 이력"))
         
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("한국어", "ko")

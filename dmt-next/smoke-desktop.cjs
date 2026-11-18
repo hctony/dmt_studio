@@ -10,8 +10,8 @@ app.whenReady().then(async()=>{
   let win;for(let i=0;i<100;i++){win=BrowserWindow.getAllWindows()[0];if(win&&!win.webContents.isLoading())break;await delay(100);}
   await delay(1000);
   const initial=await win.webContents.executeJavaScript('window.studio.snapshot()');
-  if(initial.root.labels.length!==10)throw new Error('Missing tabs');
-  for(let i=0;i<10;i++){
+  if(initial.root.labels.length!==11)throw new Error('Missing tabs');
+  for(let i=0;i<11;i++){
    await win.webContents.executeJavaScript(`window.studio.action({id:${JSON.stringify(initial.root.id)},action:'tab',value:${i}})`);
    await delay(100);
    const count=await win.webContents.executeJavaScript("document.querySelectorAll('#content button').length");
@@ -19,7 +19,9 @@ app.whenReady().then(async()=>{
   }
   await win.webContents.executeJavaScript("document.getElementById('language').value='zh-TW';document.getElementById('language').dispatchEvent(new Event('change'))");
   const translated=await win.webContents.executeJavaScript("document.getElementById('title').textContent");
-  if(translated==='테스트')throw new Error('Translation failed');
+  if(translated!=='作業員檢驗履歷')throw new Error('History tab translation failed: '+translated);
+  await delay(200);
+  fs.writeFileSync(path.join(__dirname,'smoke-user-data','history-zh.png'),(await win.webContents.capturePage()).toPNG());
   await win.webContents.executeJavaScript("document.getElementById('language').value='ko';document.getElementById('language').dispatchEvent(new Event('change'))");
   await win.webContents.executeJavaScript(`window.studio.action({id:${JSON.stringify(initial.root.id)},action:'tab',value:8})`);
   await delay(100);

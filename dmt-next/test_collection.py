@@ -57,6 +57,20 @@ class CollectionTests(unittest.TestCase):
         file=self.txt();file.write_text('1,RX-,RX-01\nRX-,RX-01,1,1,T,SM03\n')
         _,report=self.collect();self.assertFalse(report['complete']);self.assertEqual(len(report['hosts'][0]['parse_errors']),1)
         self.assertIn('TXT_WRITING_OR_TRUNCATED',report['hosts'][0]['parse_errors'][0]['error'])
+
+    def test_reentry_uses_filename_date_and_archives_operator_before_merge(self):
+        from core.collection import collect
+        from core.inspection_history import search, original
+        for day,code in [('17','SM03'),('18','DR01')]:
+            file=self.pc/f'M_RX-_admin_2026-11-{day} 132845.txt'
+            file.write_text(f'88,RX-,RX-01\nRX-,RX-01,1,1,T,{code}\nRX-,RX-01,EOS\n',encoding='utf-8')
+        scope={'enabled':True,'date':'2026-11-18','reuse_xml':True}
+        parsed,report=collect([self.pc],30,'RX-','IVS',lambda:False,lambda m:None,scope=scope)
+        self.assertTrue(report['complete']);self.assertEqual(report['hosts'][0]['scope_excluded'],1)
+        self.assertEqual(len(parsed[self.pc]),1);self.assertIn('DR01',parsed[self.pc][0][1].defect_lines[0])
+        saved=[r for r in search(strip='RX-01',mode='IVS') if str(self.pc) in r['source_path']]
+        self.assertEqual(len(saved),1);self.assertEqual(saved[0]['operator'],'admin')
+        self.assertIn(b'DR01',original(saved[0]['id'])[1])
     def test_export_receipt_blocks_partial_changed_or_wrong_stage(self):
         from core.collection import write_export,reports_for_inputs
         self.txt();_,report=self.collect([self.pc,self.root/'offline'])
