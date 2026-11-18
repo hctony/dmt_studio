@@ -12,7 +12,7 @@ from core.utils import read_text_lines
 # ---------------------------------------------------------------------------
 # Module-level caches (cleared on restart, keyed by path/mtime/size/lot)
 # ---------------------------------------------------------------------------
-GATHER_FILE_CACHE: dict[tuple[str, float, int, str], dict[str, GatherStrip]] = {}
+GATHER_FILE_CACHE: dict[tuple[str, int, int, str, int, bool], dict[str, GatherStrip]] = {}
 GATHER_TXT_LIST_CACHE: dict[tuple[str, float], list[Path]] = {}
 
 
@@ -216,11 +216,13 @@ def build_gather_duplicate_conflict(
 # File parsing with cache
 # ---------------------------------------------------------------------------
 
-def parse_gather_file(path: Path, lot: str, stats: dict | None = None) -> dict[str, GatherStrip]:
+def parse_gather_file(path: Path, lot: str, stats: dict | None = None, *,
+                      latest_only: bool = False) -> dict[str, GatherStrip]:
     try:
         stat_info = path.stat()
         source_mtime = stat_info.st_mtime
-        cache_key = (str(path), stat_info.st_mtime_ns, stat_info.st_size, lot.strip().upper(), stat_info.st_ctime_ns)
+        cache_key = (str(path), stat_info.st_mtime_ns, stat_info.st_size, lot.strip().upper(),
+                     stat_info.st_ctime_ns, latest_only)
         cached = GATHER_FILE_CACHE.get(cache_key)
         if cached is not None:
             if stats is not None: stats['memory_hits'] = stats.get('memory_hits', 0) + 1
@@ -254,7 +256,7 @@ def parse_gather_file(path: Path, lot: str, stats: dict | None = None) -> dict[s
         target = result.get(key)
         if target is None:
             result[key] = candidate
-        elif should_replace_gather_strip(target, candidate):
+        elif latest_only or should_replace_gather_strip(target, candidate):
             candidate.sources = unique_lines(target.sources + candidate.sources)
             candidate.replaced_count = target.replaced_count + 1
             result[key] = candidate
@@ -277,7 +279,8 @@ def parse_gather_file(path: Path, lot: str, stats: dict | None = None) -> dict[s
             continue
 
         if len(parts) == 3 and parts[0].isdigit():
-            flush()
+            if not latest_only:
+                flush()
             header_lot = parts[1].upper()
             strip_id = parts[2].upper()
             if not expected_lot or header_lot == expected_lot or strip_id.startswith(expected_lot):
@@ -299,7 +302,8 @@ def parse_gather_file(path: Path, lot: str, stats: dict | None = None) -> dict[s
                     break
             if found_strip:
                 current_lines.append(line)
-    flush()
+    if not latest_only:
+        flush()
     if cache_key[0]:
         GATHER_FILE_CACHE[cache_key] = result
     return result

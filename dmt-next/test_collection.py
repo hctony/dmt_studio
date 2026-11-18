@@ -122,4 +122,24 @@ class CollectionTests(unittest.TestCase):
         parsed,report=self.collect();self.assertTrue(report['complete']);self.assertEqual(len(parsed[self.pc]),2)
         self.assertEqual(parsed[self.pc][-1][1].defect_lines,[])
 
+    def test_native_worker_replaces_old_defects_with_latest_empty_block(self):
+        from workers.gather_workers import GatheringWorker
+        first = self.pc / 'M_RX-_op_2026-01-01 120000.txt'
+        latest = self.pc / 'M_RX-_op_2026-01-03 120000.txt'
+        first.write_text('1,RX-,RX-01\nRX-,RX-01,1,1,T,SM03\nRX-,RX-01,EOS\n')
+        latest.write_text('1,RX-,RX-01\nRX-,RX-01,1,1,T,DR01\nRX-,RX-01,EOS\n'
+                          '1,RX-,RX-01\nRX-,RX-01,EOS\n')
+        worker = GatheringWorker('IVS','1','unused','M','RX-',2,2,10,'170',set(),set())
+        worker.build_paths = lambda: [self.pc]
+        results, errors = [], []
+        worker.finished.connect(lambda *args: results.append(args))
+        worker.failed.connect(errors.append)
+        worker.run()
+        self.assertFalse(errors,errors)
+        strips, _output, summary = results[0]
+        self.assertTrue(summary['collection']['complete'])
+        self.assertEqual(summary['auto_duplicate_selection_count'],2)
+        self.assertEqual(strips[0].defect_lines,[])
+        self.assertEqual(strips[0].sources[0],str(latest))
+
 if __name__=='__main__':unittest.main()

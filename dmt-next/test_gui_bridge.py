@@ -112,11 +112,8 @@ class GuiTests(unittest.TestCase):
         self.answers['message']=W.QMessageBox.No.value;self.action(tab.btn_execute,'click');self.assertTrue((smk/'S1.smk').exists())
         self.answers['message']=W.QMessageBox.Yes.value;self.action(tab.btn_execute,'click')
         self.assertTrue((smk/'BK'/'S1.smk').exists());self.assertEqual((pmk/'x_Master.pmk').read_text(),'S2\n');self.assertTrue(list((pmk/'BK').glob('*.bak')))
-    def test_date_and_duplicate_dialogs_have_electron_actions(self):
-        from ui.tabs.gathering_tab import ReworkDateDialog,GatherDuplicateDialog
-        date=ReworkDateDialog(['2026-01-01','2026-01-02'],self.c.window);date.show();self.app.processEvents()
-        self.action(date.combo,'select',1);self.assertEqual(date.get_selected_date(),'2026-01-02')
-        self.assertTrue(self.c.snapshot()['dialogs']);self.action(date,'reject');self.assertFalse(date.isVisible())
+    def test_duplicate_dialog_can_still_render_in_electron(self):
+        from ui.tabs.gathering_tab import GatherDuplicateDialog
         duplicate=GatherDuplicateDialog({'strip_id':'S1'},1,1,self.c.window);duplicate.show();self.app.processEvents()
         self.action(duplicate.radio_merge,'check',True);duplicate.accept();self.assertEqual(duplicate.choice,'merge')
     def test_table_pagination_and_input_persistence(self):
@@ -394,26 +391,44 @@ class GuiTests(unittest.TestCase):
         value=self.c.ask('message',{'title':'Confirm','text':'Test','buttons':[]})
         self.assertEqual(value,W.QMessageBox.Yes.value)
 
-    def test_gather_worker_and_duplicate_selection_flow(self):
+    def test_gather_uses_latest_complete_txt_per_process_without_date_dialog(self):
         from workers.gather_workers import GatheringWorker
-        from ui.tabs.gathering_tab import GatheringModePage,GatherDuplicateDialog,GatherReviewDialog
-        txt,_=self.fixture();second=self.root/'second.txt';second.write_text(txt.read_text().replace(',1,1,',',2,1,'))
-        stamp=1700000000;os.utime(txt,(stamp,stamp));os.utime(second,(stamp+1,stamp+1))
-        worker=GatheringWorker('VRS','1','unused','M','RX1234-',2,2,10,'170',set(),set())
-        worker.build_paths=lambda:[self.root]
-        results=[];worker.finished.connect(lambda *args:results.append(args));worker.run()
-        self.assertEqual(len(results),1);self.assertTrue(results[0][2]['duplicate_conflicts'])
-        tab=self.tab(3);tab.lot_in.setText('RX1234-');tab.allowance_in.setText('10');tab.x_count_in.setText('2');tab.y_count_in.setText('2')
-        page=next(p for p in tab.findChildren(GatheringModePage) if p.mode=='VRS')
-        def choose_merge():
-            dlg=next(w for w in self.app.topLevelWidgets() if isinstance(w,GatherReviewDialog) and w.isVisible())
-            self.action(dlg.candidate_combo,'select',dlg.candidate_combo.count()-1)
-            buttons=dlg.findChild(W.QDialogButtonBox)
-            self.action(buttons.button(W.QDialogButtonBox.Ok),'click')
-        C.QTimer.singleShot(20,choose_merge)
-        page.on_finished(*results[0])
-        self.assertEqual(page.summary['manual_duplicate_selection_count'],1)
-        self.assertIn(',1,1,',page.output_text);self.assertIn(',2,1,',page.output_text)
+        from core import rework_scope
+        sources = {}
+        for mode, replacement in [('IVS', ''), ('VRS', 'RX1234-,RX1234-01,2,1,T,OT12\n')]:
+            folder = self.root / mode
+            folder.mkdir()
+            old = folder / 'M_RX1234-_op_2026-01-01 120000.txt'
+            new = folder / 'M_RX1234-_op_2026-01-03 120000.txt'
+            old.write_text('1,RX1234-,RX1234-01\nRX1234-,RX1234-01,1,1,T,SM03\nRX1234-,RX1234-01,EOS\n'
+                           '1,RX1234-,RX1234-02\nRX1234-,RX1234-02,1,2,T,SM03\nRX1234-,RX1234-02,EOS\n')
+            new.write_text('1,RX1234-,RX1234-01\nRX1234-,RX1234-01,1,1,T,DR01\nRX1234-,RX1234-01,EOS\n'
+                           '1,RX1234-,RX1234-01\n' + replacement + 'RX1234-,RX1234-01,EOS\n')
+            os.utime(old, (time.time(), time.time()))
+            os.utime(new, (time.time()-60, time.time()-60))
+            sources[mode]=folder
+
+        def gather(mode):
+            worker = GatheringWorker(mode,'1','unused','M','RX1234-',2,2,10,'170',set(),set())
+            worker.build_paths = lambda: [sources[mode]]
+            result, errors = [], []
+            worker.finished.connect(lambda strips, output, summary: result.append((strips, summary)))
+            worker.failed.connect(errors.append)
+            worker.run()
+            self.assertFalse(errors,errors)
+            strips,summary = result[0]
+            return {strip.strip_id: strip.defect_lines for strip in strips},summary
+
+        with patch.dict(os.environ, {'DMT_CACHE_DIR': str(self.root/'cache')}), patch('core.collection.enabled', return_value=False):
+            ivs, summary = gather('IVS')
+            vrs, _ = gather('VRS')
+            self.assertEqual(ivs['RX1234-01'], [])
+            self.assertEqual(vrs['RX1234-01'], ['RX1234-,RX1234-01,2,1,T,OT12'])
+            self.assertIn('RX1234-02', ivs)
+            self.assertEqual(summary['auto_duplicate_selection_count'],2)
+            rework_scope.save('M','RX1234-',True,'2026-01-02',False)
+            ivs, _ = gather('IVS')
+            self.assertEqual(ivs, {'RX1234-01': []})
 
     def test_three_process_batch_export(self):
         from workers.gather_workers import GatheringWorker

@@ -248,29 +248,6 @@ class GatherReviewDialog(QDialog):
         super().accept()
 
 
-class ReworkDateDialog(QDialog):
-    def __init__(self, dates: list[str], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(_("재작업 일자 선택"))
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(_("데이터에 여러 날짜가 포함되어 있습니다.\n시작할 기준 일자를 선택하세요.\n선택한 일자 이전의 데이터는 집계에서 제외됩니다.")))
-        self.combo = QComboBox()
-        self.combo.addItems(dates)
-        layout.addWidget(self.combo)
-        
-        btn_layout = QHBoxLayout()
-        btn_ok = QPushButton(_("선택 적용"))
-        btn_all = QPushButton(_("전체 적용 (필터 없음)"))
-        btn_ok.clicked.connect(self.accept)
-        btn_all.clicked.connect(self.reject)
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_all)
-        layout.addLayout(btn_layout)
-
-    def get_selected_date(self) -> str:
-        return self.combo.currentText()
-
-
 class BatchProgressDialog(QDialog):
     def __init__(self, modes: list[str], parent=None):
         super().__init__(parent)
@@ -390,18 +367,7 @@ class GatheringModePage(QWidget):
         self.worker.progress.connect(self.log)
         self.worker.finished.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
-        self.worker.date_selection_required.connect(self.on_date_selection_required)
         start_worker(self, self.worker)
-
-    def on_date_selection_required(self, dates: list[str]) -> None:
-        dialog = ReworkDateDialog(dates, self)
-        if dialog.exec() == QDialog.Accepted:
-            selected = dialog.get_selected_date()
-            from datetime import datetime
-            timestamp = datetime.strptime(selected, "%Y-%m-%d").timestamp()
-            self.worker.set_rework_date(timestamp)
-        else:
-            self.worker.set_rework_date(0.0)
 
     def stop(self) -> None:
         if self.worker:
@@ -739,15 +705,17 @@ class GatheringTab(QWidget):
             QMessageBox.warning(self, _("선택 없음"), _("일괄 추출할 공정을 하나 이상 선택하세요."))
             return
             
-        lot = self.lot_in.text().strip()
-        if not lot:
-            QMessageBox.warning(self, _("입력 오류"), _("LOT 번호를 입력하세요."))
+        config = self.read_config()
+        if not config:
             return
             
         out_dir = QFileDialog.getExistingDirectory(self, _("저장 폴더 선택"))
         if not out_dir:
             return
             
+        from core.rework_scope import load as load_scope
+        self.batch_config = config
+        self.batch_rework_scope = load_scope(config['model'], config['lot'])
         self.batch_modes = modes
         self.batch_out_dir = Path(out_dir)
         self.batch_current_idx = 0
@@ -767,10 +735,7 @@ class GatheringTab(QWidget):
         mode = self.batch_modes[self.batch_current_idx]
         self.batch_dialog.set_current_mode(self.batch_current_idx + 1, len(self.batch_modes), mode)
         
-        config = self.read_config()
-        if not config:
-            self.btn_batch_export.setEnabled(True)
-            return
+        config = dict(self.batch_config)
             
         from ui.settings_helper import setting_text
         default_ip = "121-130" if mode == "VRS" else "101-110" if mode == "FVI" else "108"
@@ -784,26 +749,13 @@ class GatheringTab(QWidget):
         config["ip_list_str"] = setting_text(f"gathering/{mode}/ip", default_ip)
         config["base_path_template"] = setting_text(f"gathering/{mode}/path", default_path)
         
-        self.batch_worker = GatheringWorker(mode=mode, **config)
+        self.batch_worker = GatheringWorker(mode=mode, rework_scope=self.batch_rework_scope, **config)
         self.batch_run_context = dict(config)
         self.batch_worker.progress.connect(self.batch_dialog.append_log)
         self.batch_worker.finished.connect(self._on_batch_finished)
         self.batch_worker.failed.connect(self._on_batch_failed)
-        self.batch_worker.date_selection_required.connect(self._on_batch_date_selection_required)
         start_worker(self, self.batch_worker)
         
-    def _on_batch_date_selection_required(self, dates: list[str]) -> None:
-        mode = self.batch_modes[self.batch_current_idx]
-        dialog = ReworkDateDialog(dates, self)
-        dialog.setWindowTitle(f"{mode} - " + _("재작업 일자 선택"))
-        if dialog.exec() == QDialog.Accepted:
-            selected = dialog.get_selected_date()
-            from datetime import datetime
-            timestamp = datetime.strptime(selected, "%Y-%m-%d").timestamp()
-            self.batch_worker.set_rework_date(timestamp)
-        else:
-            self.batch_worker.set_rework_date(0.0)
-
     def _on_batch_finished(self, strips: list, output: str, summary: dict) -> None:
         mode = self.batch_modes[self.batch_current_idx]
         collection = summary.get('collection') or {}
