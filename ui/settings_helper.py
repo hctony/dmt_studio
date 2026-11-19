@@ -3,6 +3,7 @@ from __future__ import annotations
 from core.i18n import _
 
 import json
+import os
 from pathlib import Path
 from core.utils import first_path_text
 
@@ -30,20 +31,33 @@ def save_setting_text(key: str, value: str) -> None:
     APP_SETTINGS.setValue(key, value)
 
 
-def load_yield_model_settings() -> dict:
-    if not YIELD_MODEL_SETTINGS_PATH.is_file():
+def load_yield_model_settings(path=None) -> dict:
+    path = YIELD_MODEL_SETTINGS_PATH if path is None else path
+    if not path.is_file():
         return {}
     try:
-        payload = json.loads(YIELD_MODEL_SETTINGS_PATH.read_text(encoding="utf-8-sig"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
 
 
+def gathering_model_settings(model: str) -> dict:
+    def find(settings):
+        return next((fields for name, fields in settings.items()
+                     if name.casefold() == model.casefold() and isinstance(fields, dict)), {})
+
+    server_env = os.environ.get('DMT_SERVER_NAS_ENV')
+    shared = load_yield_model_settings(Path(server_env).with_name('yield_model_settings.json')) if server_env else {}
+    saved = find(load_yield_model_settings())
+    defaults = find(shared)
+    return {key: saved[key] if saved.get(key) not in (None, '') else defaults.get(key, '')
+            for key in ('x_count', 'y_count', 'units_per_strip', 'xout_limit')}
+
+
 def save_yield_model_settings(payload: dict) -> None:
-    YIELD_MODEL_SETTINGS_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    from core.yield_handoff import _write
+    _write(YIELD_MODEL_SETTINGS_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def dialog_dir_for_file(current_text: str) -> str:

@@ -350,6 +350,7 @@ class YieldTab(QWidget):
             return
         model_settings = load_yield_model_settings()
         model_settings[model] = {
+            **model_settings.get(model, {}),
             "units_per_strip": self.units_per_strip_in.text().strip(),
             "xout_limit": self.xout_limit_in.text().strip(),
             "vrs_txt_paths": self.vrs_txt_in.text().strip(),

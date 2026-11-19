@@ -2,13 +2,14 @@
 from __future__ import annotations
 from ui.worker_lifetime import start_worker
 from core.i18n import _
+import os
 
 import re
 from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QThread, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -45,6 +46,23 @@ from ui.settings_helper import restore_line_edit, save_line_edit
 from workers.gather_workers import GatheringWorker
 from workers.ivs_workers import ImageLoaderThread, StripDefectSearchThread
 from workers.strip_workers import ModelLotListThread
+
+
+class NasGeometryWorker(QThread):
+    completed = Signal(str, dict, str)
+    unavailable = Signal(str)
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def run(self):
+        from core.nas_geometry import lookup
+        try:
+            profile, source = lookup(self.model)
+            self.completed.emit(self.model, profile, source)
+        except (OSError, ValueError) as error:
+            self.unavailable.emit(str(error))
 
 
 class GatherDuplicateDialog(QDialog):
@@ -467,7 +485,7 @@ class GatheringModePage(QWidget):
 
     def prepare_manual_selected_strip(self, item: GatherStrip) -> GatherStrip:
         excluded_codes = {code.strip() for code in re.split(r"[,;\s]+", self.parent_tab.exclude_codes_in.text()) if code.strip()}
-        fill_code = self.parent_tab.fill_code_in.text().strip() or "170"
+        fill_code = "170"
         excluded_codes.discard(fill_code)
         item.defect_lines = [line for line in item.defect_lines if line.split(",")[-1].strip() not in excluded_codes]
         try:
@@ -562,7 +580,7 @@ class GatheringTab(QWidget):
         self.x_count_in = QLineEdit("22")
         self.y_count_in = QLineEdit("4")
         self.allowance_in = QLineEdit("13")
-        self.fill_code_in = QLineEdit("170")
+        self.fill_code_in = QLabel(_("170 (성적서 OT06)"))
         self.exclude_codes_in = QLineEdit()
         self.exclude_codes_in.setPlaceholderText(_("예: 9998,SM04,170"))
         self.exclude_json_in = QLineEdit()
@@ -574,7 +592,16 @@ class GatheringTab(QWidget):
         restore_line_edit(self.x_count_in, "gathering/x_count", "22")
         restore_line_edit(self.y_count_in, "gathering/y_count", "4")
         restore_line_edit(self.allowance_in, "gathering/allowance", "13")
-        restore_line_edit(self.fill_code_in, "gathering/fill_code", "170")
+        self.geometry_model = self.model_in.text().strip().casefold()
+        self.restore_model_geometry()
+        self.model_in.editingFinished.connect(self.restore_model_geometry)
+        self.model_in.editingFinished.connect(self.ensure_nas_geometry)
+        self.geometry_requested = ''
+        self.geometry_worker = None
+        self.geometry_status = QLabel()
+        self.geometry_status.setWordWrap(True)
+        self.btn_nas_geometry = QPushButton(_('NAS 좌표·허용수 불러오기'))
+        self.btn_nas_geometry.clicked.connect(lambda: self.ensure_nas_geometry(force=True))
         restore_line_edit(self.exclude_codes_in, "gathering/exclude_codes")
         restore_line_edit(self.exclude_json_in, "gathering/exclude_json")
         restore_line_edit(self.skipdata_in, "gathering/skipdata")
@@ -618,6 +645,7 @@ class GatheringTab(QWidget):
         form.addRow(_("Y 좌표 수"), self.y_count_in)
         form.addRow(_("허용수"), self.allowance_in)
         form.addRow(_("전체처리 코드"), self.fill_code_in)
+        form.addRow(self.btn_nas_geometry, self.geometry_status)
         form.addRow(_("제외 불량"), self.exclude_codes_in)
         form.addRow(_("제외 StripID JSON"), json_row)
         form.addRow(_("BBT/Skipdata 폴더"), skipdata_row)
@@ -859,13 +887,75 @@ class GatheringTab(QWidget):
             except ImportError:
                 pass
 
+    def ensure_nas_geometry(self, force=False):
+        model = self.model_in.text().strip()
+        if not force and (os.environ.get('DMT_NAS_GEOMETRY') != '1' or not re.fullmatch(r'\d[A-Za-z0-9]*-[A-Za-z0-9_-]+', model)):
+            return
+        if not model or (not force and self.geometry_requested == model):
+            return
+        if self.geometry_worker and self.geometry_worker.isRunning():
+            return
+        self.geometry_requested = model
+        self.geometry_status.setText(_('NAS 모델 수량 확인 중'))
+        worker = NasGeometryWorker(model)
+        worker.completed.connect(self.on_nas_geometry)
+        worker.unavailable.connect(self.on_nas_geometry_unavailable)
+        self.geometry_worker = worker
+        start_worker(self, worker)
+
+    def on_nas_geometry(self, model, profile, source):
+        if self.model_in.text().strip().casefold() != model.casefold():
+            return
+        self.restore_model_geometry(profile)
+        try:
+            self.remember_geometry(model, profile)
+        except OSError as error:
+            self.geometry_status.setText(_('저장 실패') + ': ' + str(error))
+            return
+        self.geometry_status.setText(_('NAS 모델 수량 적용') + ': ' + source)
+
+    def on_nas_geometry_unavailable(self, _error):
+        self.geometry_status.setText(_('NAS 수량을 확인하지 못했습니다. 저장된 값 또는 X·Y 설정을 확인하세요.'))
+
+    def restore_model_geometry(self, profile=None) -> None:
+        from ui.settings_helper import gathering_model_settings
+        model = self.model_in.text().strip()
+        changed = self.geometry_model != model.casefold()
+        if profile is None:
+            profile = gathering_model_settings(model)
+        for field, key in ((self.x_count_in, 'x_count'), (self.y_count_in, 'y_count'), (self.allowance_in, 'xout_limit')):
+            value = profile.get(key)
+            if value not in (None, ''):
+                field.setText(str(value))
+            elif changed:
+                field.clear()
+        self.geometry_model = model.casefold()
+
+    @staticmethod
+    def remember_geometry(model, profile):
+        from ui.settings_helper import load_yield_model_settings, save_yield_model_settings
+        settings = load_yield_model_settings()
+        key = next((name for name in settings if name.casefold() == model.casefold()), model)
+        previous = settings.get(key, {})
+        if not isinstance(previous, dict):
+            previous = {}
+        settings[key] = {**previous, **{key: str(value) for key, value in profile.items()}}
+        save_yield_model_settings(settings)
+
     def read_config(self) -> Optional[dict]:
+        self.ensure_nas_geometry()
+        if self.geometry_worker and self.geometry_worker.isRunning():
+            QMessageBox.information(self, _("NAS 모델 수량 확인 중"), _("NAS 좌표·허용수가 표시되면 집계를 실행하세요."))
+            return None
         try:
             x_count = int(self.x_count_in.text().strip())
             y_count = int(self.y_count_in.text().strip())
             allowance = int(self.allowance_in.text().strip())
         except ValueError:
             QMessageBox.warning(self, _("입력 오류"), _("X/Y 좌표 수와 허용수는 숫자여야 합니다."))
+            return None
+        if x_count <= 0 or y_count <= 0 or allowance < 0:
+            QMessageBox.warning(self, _("입력 오류"), _("X/Y는 1 이상, 허용수는 0 이상이어야 합니다."))
             return None
         lot = self.lot_in.text().strip()
         if not lot:
@@ -876,14 +966,23 @@ class GatheringTab(QWidget):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, _("제외 JSON 오류"), str(exc))
             return None
+        from ui.settings_helper import gathering_model_settings
+        model = self.model_in.text().strip()
+        known_units = gathering_model_settings(model).get('units_per_strip')
+        if str(known_units).isdigit() and int(known_units) > 0 and x_count * y_count != int(known_units):
+            QMessageBox.warning(self, _("입력 오류"), _("X × Y가 모델의 Strip당 Unit 수와 다릅니다.") +
+                                f" {x_count} × {y_count} ≠ {known_units}")
+            return None
+        if model:
+            self.remember_geometry(model, {'x_count': x_count, 'y_count': y_count,
+                                           'units_per_strip': x_count * y_count, 'xout_limit': allowance})
         excluded_codes = {code.strip() for code in re.split(r"[,;\s]+", self.exclude_codes_in.text()) if code.strip()}
-        excluded_codes.discard(self.fill_code_in.text().strip() or "170")
+        excluded_codes.difference_update({'170', 'OT06'})
         save_line_edit(self.model_in, "gathering/model")
         save_line_edit(self.lot_in, "gathering/lot")
         save_line_edit(self.x_count_in, "gathering/x_count")
         save_line_edit(self.y_count_in, "gathering/y_count")
         save_line_edit(self.allowance_in, "gathering/allowance")
-        save_line_edit(self.fill_code_in, "gathering/fill_code")
         save_line_edit(self.exclude_codes_in, "gathering/exclude_codes")
         save_line_edit(self.exclude_json_in, "gathering/exclude_json")
         save_line_edit(self.skipdata_in, "gathering/skipdata")
@@ -891,12 +990,12 @@ class GatheringTab(QWidget):
         return {
             "lookback_days": int(self.search_period.currentData()),
             "force_recollect": self.force_recollect.isChecked(),
-            "model": self.model_in.text().strip(),
+            "model": model,
             "lot": lot,
             "x_count": x_count,
             "y_count": y_count,
             "allowance": allowance,
-            "fill_code": self.fill_code_in.text().strip() or "170",
+            "fill_code": "170",
             "excluded_codes": excluded_codes,
             "excluded_strip_ids": excluded_strip_ids,
             "skipdata_path": self.skipdata_in.text().strip(),

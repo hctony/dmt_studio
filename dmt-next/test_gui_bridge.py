@@ -325,7 +325,7 @@ class GuiTests(unittest.TestCase):
         tab.vrs_txt_in.setText('previous-lot.txt');self.c.save_inputs()
         old_inputs=self.c.input_path.read_bytes()
         with patch.object(config,'YIELD_MODEL_SETTINGS_PATH',path):
-            result=self.c.model_profiles.import_data({'MODEL':{'xout_limit':18,'vrs_txt_paths':r'Z:\Taiwan\LOT01.txt','ivs_json_paths':''}})
+            result=self.c.model_profiles.import_data({'MODEL':{'xout_limit':18,'x_count':11,'y_count':8,'vrs_txt_paths':r'Z:\Taiwan\LOT01.txt','ivs_json_paths':''}})
             stored=json.loads(path.read_text())
             self.assertIn('KEEP',stored);self.assertEqual(stored['MODEL']['ski_path'],'old.ski')
             self.assertEqual(tab.xout_limit_in.text(),'18');self.assertEqual(tab.vrs_txt_in.text(),r'Z:\Taiwan\LOT01.txt')
@@ -336,7 +336,7 @@ class GuiTests(unittest.TestCase):
             gather=self.tab(3);gather.allowance_in.setText('5');gather.x_count_in.setText('22');gather.y_count_in.setText('4')
             self.c.model_profiles.apply('MODEL');self.assertEqual(gather.allowance_in.text(),'5')
             self.c.model_profiles.apply('MODEL',True);self.assertEqual(gather.allowance_in.text(),'18')
-            self.assertEqual((gather.x_count_in.text(),gather.y_count_in.text()),('22','4'))
+            self.assertEqual((gather.x_count_in.text(),gather.y_count_in.text()),('11','8'))
 
     def test_invalid_or_busy_model_import_leaves_files_unchanged(self):
         import config
@@ -480,8 +480,8 @@ class GuiTests(unittest.TestCase):
                 time.sleep(.01)
             self.assertTrue(tab.btn_batch_export.isEnabled())
             tab.batch_dialog.close()
-            self.assertEqual(tab.batch_out_dir, correct)
-            self.assertEqual(tab.batch_config['skipdata_path'], str(correct))
+            self.assertEqual(tab.batch_out_dir, correct.resolve())
+            self.assertEqual(Path(tab.batch_config['skipdata_path']), correct.resolve())
             self.assertFalse(any(kind=='directory' for kind, _data in self.dialogs))
             for mode in ('VRS','FVI','IVS'):
                 target = correct/f'Gather_{mode}_RXTEST-{tab.batch_export_suffix}.txt'
@@ -510,6 +510,51 @@ class GuiTests(unittest.TestCase):
         self.assertIn('access denied', self.dialogs[-1][1]['text'])
         self.assertNotIn('online-share', log[0])
         self.assertFalse(list(self.root.glob('Gather_*')))
+
+    def test_gathering_geometry_follows_model_and_survives_yield_save(self):
+        settings = self.root / 'yield_model_settings.json'
+        settings.write_text(json.dumps({
+            'MODEL-A': {'x_count': '12', 'y_count': '5', 'units_per_strip': '60', 'xout_limit': '9'},
+            'LEGACY': {'units_per_strip': '88', 'xout_limit': 0},
+        }), encoding='utf-8')
+        gather = self.tab(3)
+        with patch('ui.settings_helper.YIELD_MODEL_SETTINGS_PATH', settings):
+            self.action(gather.model_in, 'input', 'MODEL-A')
+            self.assertEqual([w.text() for w in (gather.x_count_in,gather.y_count_in,gather.allowance_in)], ['12','5','9'])
+            gather.lot_in.setText('RXTEST-')
+            gather.exclude_json_in.clear()
+            config = gather.read_config()
+            self.assertEqual((config['x_count'],config['y_count'],config['allowance'],config['fill_code']), (12,5,9,'170'))
+            yield_tab = self.c.window.centralWidget().widget(6)
+            yield_tab.model_in.setText('MODEL-A')
+            yield_tab.restore_model_units()
+            yield_tab.save_model_yield_settings()
+            self.assertEqual(json.loads(settings.read_text())['MODEL-A']['x_count'], '12')
+            self.action(gather.model_in, 'input', 'LEGACY')
+            self.assertEqual([w.text() for w in (gather.x_count_in,gather.y_count_in,gather.allowance_in)], ['','','0'])
+
+    def test_nas_handler_sets_coordinates_and_twenty_percent_allowance(self):
+        from core.nas_geometry import lookup
+        repository = self.root / 'PxRepository'
+        handler = repository / '7TEST-P93' / '2.0' / 'Line' / 'Top' / 'Top_handler.txt'
+        handler.parent.mkdir(parents=True)
+        handler.write_text('UnitRowNum=22\nUnitColNum=4\n', encoding='utf-16')
+        expected = {'x_count': 22, 'y_count': 4, 'units_per_strip': 88, 'xout_limit': 17}
+        self.assertEqual(lookup('7TEST-P93', repository), (expected, str(handler)))
+        tab = self.tab(3)
+        tab.model_in.setText('7TEST-P93')
+        settings = self.root / 'yield_model_settings.json'
+        from functools import partial
+        with patch('core.nas_geometry.lookup', side_effect=partial(lookup, repository=repository)), \
+             patch('ui.settings_helper.YIELD_MODEL_SETTINGS_PATH', settings):
+            self.action(tab.btn_nas_geometry,'click')
+            deadline = time.monotonic() + 3
+            while tab.geometry_worker.isRunning() and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.app.processEvents()
+            self.assertEqual([tab.x_count_in.text(),tab.y_count_in.text(),tab.allowance_in.text()], ['22','4','17'])
+            self.assertEqual(json.loads(settings.read_text())['7TEST-P93']['units_per_strip'], '88')
 
     def test_server_work_roots_use_local_inputs_and_legacy_ivs_range(self):
         from ui.tabs.gathering_tab import GatheringModePage

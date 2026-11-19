@@ -12,6 +12,8 @@ FIELDS = {
     'ivs_txt_paths': 'ivs_txt_in', 'ivs_json_paths': 'ivs_json_in',
     'skipdata_path': 'skipdata_in', 'ski_path': 'ski_in',
 }
+GEOMETRY = {'x_count', 'y_count'}
+NUMERIC_FIELDS = {'units_per_strip', 'xout_limit'} | GEOMETRY
 
 
 def validate(payload):
@@ -22,17 +24,20 @@ def validate(payload):
         if not isinstance(model, str) or not model.strip() or model != model.strip() or not isinstance(values, dict):
             raise ValueError('모델 이름 또는 설정 형식 오류 / 機種名稱或設定格式錯誤')
         profile = {}
-        for key in FIELDS:
+        for key in (*FIELDS, *sorted(GEOMETRY)):
             if key not in values:
                 continue
             value = values[key]
-            if isinstance(value, bool) or not isinstance(value, (str, int)) or (key not in ('units_per_strip', 'xout_limit') and not isinstance(value, str)):
+            if isinstance(value, bool) or not isinstance(value, (str, int)) or (key not in NUMERIC_FIELDS and not isinstance(value, str)):
                 raise ValueError(f'{model}: {key} — 잘못된 값 / 無效的值')
             value = str(value).strip()
-            if key in ('units_per_strip', 'xout_limit') and value:
-                if not value.isascii() or not value.isdigit() or (key == 'units_per_strip' and int(value) == 0):
+            if key in NUMERIC_FIELDS and value:
+                if not value.isascii() or not value.isdigit() or (key != 'xout_limit' and int(value) == 0):
                     raise ValueError(f'{model}: {key} — 수량 오류 / 數量錯誤')
             profile[key] = value
+        if all(profile.get(key) for key in ('x_count','y_count','units_per_strip')):
+            if int(profile['x_count']) * int(profile['y_count']) != int(profile['units_per_strip']):
+                raise ValueError(f'{model}: X × Y ≠ Unit / Strip')
         if not profile:
             raise ValueError(f'{model}: 지원하는 모델 설정이 없습니다. / 沒有支援的機種設定。')
         result[model] = profile
@@ -80,6 +85,7 @@ class ModelProfiles:
         if gathering:
             gather = tabs.widget(3)
             gather.model_in.setText(model)
+            gather.restore_model_geometry({**profile})
             for key, attr in [('xout_limit', 'allowance_in'), ('skipdata_path', 'skipdata_in'), ('ski_path', 'ski_in')]:
                 if key in profile:
                     getattr(gather, attr).setText(profile[key])
