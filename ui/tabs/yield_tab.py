@@ -233,6 +233,10 @@ class YieldTab(QWidget):
         self.btn_ot14_preview = QPushButton(_('OT14 좌표·RPT 원본 보기'))
         self.btn_ot14_preview.clicked.connect(self.preview_ot14)
         action_row.addWidget(self.btn_ot14_preview)
+        self.btn_scrap_evidence = QPushButton(_('양폐 검증 TXT 저장'))
+        self.btn_scrap_evidence.setEnabled(False)
+        self.btn_scrap_evidence.clicked.connect(self.export_scrap_evidence)
+        action_row.addWidget(self.btn_scrap_evidence)
         self.btn_report_template = QPushButton(_("성적서 템플릿 변경"))
         self.btn_report_template.clicked.connect(self.choose_report_template)
         action_row.addWidget(self.btn_report_template)
@@ -492,6 +496,12 @@ class YieldTab(QWidget):
             self.summary.setdefault('rework_scope_errors',[]).append('REWORK_SCOPE_RECOLLECT_REQUIRED')
             self.summary.setdefault('report_policy_errors',[]).append('REWORK_SCOPE_RECOLLECT_REQUIRED')
         self.refresh_result()
+        scrap_review = self.summary.get('whole_strip_review', [])
+        if any(row['status'] == 'awaiting_ski' for row in scrap_review):
+            QMessageBox.warning(self, _('Skipdata 갱신 필요'),
+                _('Skipdata를 갱신하고 최신 SKI로 다시 계산하세요.') + '\n' +
+                _('갱신 후에도 차이가 있으면 원본 TXT를 백업하고 해당 Strip 기록을 수율과 성적서에서 제외합니다.'))
+            return
         alarms=self.summary.get('dummy_alarms',[])
         if alarms:
             from core.dummy_policy import ALARM_LABELS
@@ -504,6 +514,18 @@ class YieldTab(QWidget):
         if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
             from core.its_validation import format_audits
             QMessageBox.warning(self,_('ITS 검증 미완료'),format_audits(audit)+'\n'+_('소스 누락 또는 SKI 갱신을 확인한 뒤 수율 계산을 다시 실행하세요.'))
+
+    def export_scrap_evidence(self):
+        if not self.report_ready():
+            return
+        from core.whole_strip_review import export_evidence
+        target, _filter = QFileDialog.getSaveFileName(self, _('양폐 검증 TXT 저장'), 'whole_strip_evidence.zip', 'ZIP (*.zip)')
+        if target:
+            try:
+                export_evidence(self.summary.get('whole_strip_review', []), target)
+                QMessageBox.information(self, _('저장 완료'), target)
+            except (OSError, ValueError) as error:
+                QMessageBox.warning(self, _('저장 실패'), str(error))
 
     def export_ot14_csv(self):
         if not self.report_ready():
@@ -811,6 +833,7 @@ class YieldTab(QWidget):
             if coverage:self.result.append('\n'+_('공정별 검사 이력 검증')+'\n'+'\n'.join(
                 row['strip_id']+(' · '+_('RPT에만 있음 · 집계 범위 밖') if not row.get('required_result',True) else '')+' · '+
                 ', '.join(p+': '+_(LABELS[s]) for p,s in row['processes'].items()) for row in coverage))
+            self.append_scrap_review(summary)
             return
         self.result.setPlainText(
             f"LOT: {summary['lot_id']}\n"
@@ -849,6 +872,7 @@ class YieldTab(QWidget):
         self.append_ski_gather_xout_mismatch_summary(summary)
         self.append_strip_json_validation_summary(summary)
         self.append_bbt_validation_summary(summary)
+        self.append_scrap_review(summary)
 
         distribution = summary["xout_distribution"]
         self.xout_table.setRowCount(len(distribution))
@@ -886,6 +910,16 @@ class YieldTab(QWidget):
             totals[9] += int(item.get("block_count", 0))
         self.set_sum_row(len(rows), totals, 10)
         self.strip_table.resizeColumnsToContents()
+
+    def append_scrap_review(self, summary: dict) -> None:
+        rows = summary.get('whole_strip_review', [])
+        self.btn_scrap_evidence.setEnabled(any(row['status'] == 'archived' for row in rows))
+        if not rows:
+            return
+        labels = {'awaiting_ski': _('Skipdata 갱신 필요'), 'archived': _('검증용 TXT 백업 완료 · 해당 Strip 기록 집계 제외')}
+        self.result.append('\n' + _('전량 양폐 TXT와 최종 SKI 비교') + '\n' + '\n'.join(
+            f"{row['strip_id']} · {row['process']} · TXT {row['txt_count']} / SKI {row['ski_count']} · "
+            f"{labels[row['status']]}\n{row['source']}" for row in rows))
 
     def filtered_strip_rows(self, rows: list[dict], xout_key: str) -> list[dict]:
         if not hasattr(self, "radio_table_mismatch") or not self.radio_table_mismatch.isChecked():

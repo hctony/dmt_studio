@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from zipfile import ZipFile
 from types import SimpleNamespace
 from unittest.mock import patch,MagicMock
 from core.ivs import records_to_json,load_ivs_dummy_scrap_strips
@@ -12,7 +13,8 @@ from core.report_codes import ordered_report_codes
 from core.report_trace import trace_rows,matching_groups
 from core.report_evidence import frozen_text,live_text,matching_refs,xml_excerpt
 from core.yield_calc import calculate_yield_summary_many,calculate_yield_summary_by_process,build_yield_report_aggregation
-from core.report_review import mismatch_rows
+from core.report_review import export_issues, mismatch_rows
+from core.whole_strip_review import export_evidence
 from workers.report_workers import ReportEvidenceWorker
 
 
@@ -20,6 +22,10 @@ class ReportTraceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
         self.lot='RXTEST-';self.strip=self.lot+'01'
+        self.review_root = self.root / 'whole-strip-review'
+        archive = patch('core.whole_strip_review.archive_root', return_value=self.review_root)
+        archive.start()
+        self.addCleanup(archive.stop)
 
     def record(self,code,unit='3',dummy=False,xml=''):
         return DefectRecord(self.strip,'A','MODEL',self.lot,'T','1','Dummy' if dummy else 'Unit','T','-1' if dummy else unit,'0',code,code,'','F',2,2,0,0,xml,[])
@@ -44,7 +50,7 @@ class ReportTraceTests(unittest.TestCase):
         ordered=ordered_report_codes({'final_defects_by_code_including_bbt':{'170':{'count':3},'OT06':{'count':2},'1111':{'count':1},'UNKNOWN':{'count':0}}})
         self.assertEqual(ordered,[('OT06',6)])
 
-    def test_full_txt_is_limited_to_partial_final_ski_in_both_yield_modes(self):
+    def test_full_txt_with_partial_ski_blocks_export_in_both_yield_modes(self):
         summary, report = self.fixture(
             [(1, 1, 'SM03'), (2, 1, 'DR01'), (1, 2, '170'), (2, 2, '170')],
             [(1, 1), (2, 1), (1, 2)], bbt=[(1, 2)],
@@ -54,7 +60,11 @@ class ReportTraceTests(unittest.TestCase):
         )
         for result, final in ((summary, report), (legacy, build_yield_report_aggregation(legacy, 'MODEL'))):
             with self.subTest(mode=result.get('mode', 'legacy')):
-                self.assertEqual(mismatch_rows(result), [])
+                self.assertEqual([row['strip_id'] for row in mismatch_rows(result)], [self.strip])
+                self.assertTrue(export_issues(result))
+                self.assertTrue(final['policy_errors'])
+                self.assertEqual(result['whole_strip_review'][0]['status'], 'awaiting_ski')
+                self.assertFalse(list(self.review_root.rglob('*.txt')))
                 self.assertEqual(result['gross_defective_units'], 3)
                 self.assertEqual(result['defective_units'], 2)
                 self.assertEqual(dict(ordered_report_codes(final)), {'SM03': 1, 'DR01': 1})
@@ -77,8 +87,52 @@ class ReportTraceTests(unittest.TestCase):
         with_fvi = calculate_yield_summary_by_process(
             [self.root / 'gather.txt'], [fvi], [], [], None, 4, 3, None, self.root / 'final.ski', None,
         )
-        self.assertEqual(mismatch_rows(with_fvi), [])
+        self.assertEqual([row['strip_id'] for row in mismatch_rows(with_fvi)], [self.strip])
         self.assertEqual(with_fvi['report_code_distribution'], {'DR01': 1, 'SM03': 1, 'OT12': 1})
+
+    def test_refresh_archives_original_and_excludes_only_the_conflicting_record(self):
+        self.fixture([(1, 1, 'SM03'), (2, 1, 'DR01'), (1, 2, '170'), (2, 2, '170')],
+                     [(1, 1), (2, 1), (1, 2)])
+        txt, ski, fvi = (self.root / name for name in ('gather.txt', 'final.ski', 'fvi.txt'))
+        other = self.lot + '02'
+        with txt.open('a') as stream:
+            stream.write(f'2,{self.lot},{other}\n{self.lot},{other},2,2,T,EN00\n{self.lot},{other},EOS\n')
+        with ski.open('a') as stream:
+            stream.write(f'{other},2,2\n')
+        fvi.write_text(f'1,{self.lot},{self.strip}\n' + ''.join(
+            f'{self.lot},{self.strip},{x},{y},T,{code}\n'
+            for x, y, code in [(1, 1, 'OT12'), (2, 1, 'OT13'), (1, 2, 'SM04')]
+        ) + f'{self.lot},{self.strip},EOS\n')
+        def calculate(other_paths):
+            return calculate_yield_summary_by_process([txt], other_paths, [], [], None, 4, 3, None, ski, None)
+        awaiting = calculate([fvi])
+        self.assertEqual(calculate([fvi])['whole_strip_review'], awaiting['whole_strip_review'])
+        self.assertEqual(awaiting['whole_strip_review'][0]['status'], 'awaiting_ski')
+        original = txt.read_bytes()
+        old = ski.stat()
+        os.utime(ski, ns=(old.st_atime_ns, old.st_mtime_ns + 2_000_000_000))
+        archived = calculate([fvi])
+        self.assertEqual(archived['whole_strip_review'][0]['status'], 'archived')
+        self.assertEqual(export_issues(archived), [])
+        self.assertEqual(archived['report_code_distribution'], {'EN00': 1, 'OT12': 1, 'OT13': 1, 'SM04': 1})
+        self.assertEqual(txt.read_bytes(), original)
+        package = self.root / 'evidence.zip'
+        export_evidence(archived['whole_strip_review'], package)
+        with ZipFile(package) as evidence:
+            self.assertEqual(evidence.read('TXT/' + archived['whole_strip_review'][0]['backup']), original)
+        self.assertEqual(calculate([])['whole_strip_unverified'], [self.strip])
+        self.assertEqual(calculate([fvi])['whole_strip_review'], archived['whole_strip_review'])
+
+    def test_refresh_that_matches_full_txt_does_not_archive_it(self):
+        self.fixture([(1, 1, 'SM03'), (2, 1, 'DR01'), (1, 2, '170'), (2, 2, '170')],
+                     [(1, 1), (2, 1), (1, 2)])
+        txt, ski = self.root / 'gather.txt', self.root / 'final.ski'
+        with ski.open('a') as stream:
+            stream.write(f'{self.strip},2,2\n')
+        summary = calculate_yield_summary_many([txt], None, 4, 3, None, ski)
+        self.assertEqual(summary['whole_strip_review'], [])
+        self.assertEqual(summary['gross_defective_units'], 4)
+        self.assertFalse(list(self.review_root.rglob('*.txt')))
 
     def test_preview_counts_equal_the_actual_generated_excel_columns(self):
         from core.export_excel import export_report_to_2xlsx

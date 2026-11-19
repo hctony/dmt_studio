@@ -429,7 +429,7 @@ def load_latest_process_blocks(
                 candidate.sources = unique_lines(target.sources + candidate.sources)
                 candidate.replaced_count += target.replaced_count + 1
                 merged[strip_id.upper()] = candidate
-                if selected_sources is not None:
+                if selected_sources is not None and candidate is not target:
                     selected_sources[strip_id.upper()] = str(txt_path)
                 replaced_count += 1
             else:

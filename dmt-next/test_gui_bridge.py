@@ -94,6 +94,40 @@ class GuiTests(unittest.TestCase):
         book=load_workbook(target);sheet=book.active
         self.assertEqual(sheet['H3'].value,1)
         self.assertIn(('9999',1),[(sheet.cell(1,c).value,sheet.cell(3,c).value) for c in range(10,sheet.max_column+1)]);book.close()
+
+    def test_whole_strip_conflict_requests_refresh_and_exports_the_archived_txt(self):
+        from zipfile import ZipFile
+        txt, _ids = self.fixture()
+        lot, strip = 'RX1234-', 'RX1234-01'
+        txt.write_text(f'1,{lot},{strip}\n' + ''.join(
+            f'{lot},{strip},{x},{y},T,170\n' for x, y in [(1, 1), (1, 2), (2, 1), (2, 2)]
+        ) + f'{lot},{strip},EOS\n')
+        ski = self.root / 'final.ski'
+        ski.write_text(f'{strip},1,1\n{strip},2,1\n{strip},1,2\n')
+        tab = self.tab(6)
+        for field in ('fvi_txt_in', 'ivs_txt_in', 'ivs_json_in', 'txt_in', 'strip_json_in', 'skipdata_in'):
+            getattr(tab, field).clear()
+        tab.vrs_txt_in.setText(str(txt))
+        tab.ski_in.setText(str(ski))
+        tab.units_per_strip_in.setText('4')
+        tab.xout_limit_in.setText('3')
+        archive = self.root / 'evidence.zip'
+        self.answers['save'] = str(archive)
+        with patch.dict(os.environ, {'DMT_CACHE_DIR':str(self.root / 'cache')}):
+            self.action(tab.btn_calc, 'click')
+            self.assertTrue(any(d.get('title') == 'Skipdata 갱신 필요' for _, d in self.dialogs))
+            self.assertFalse(tab.btn_scrap_evidence.isEnabled())
+            self.action(tab.btn_export_excel, 'click')
+            self.assertFalse(archive.exists())
+            stat = ski.stat()
+            os.utime(ski, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+            self.action(tab.btn_calc, 'click')
+            self.assertTrue(tab.btn_scrap_evidence.isEnabled())
+            self.action(tab.btn_scrap_evidence, 'click')
+            with ZipFile(archive) as evidence:
+                row = json.loads(evidence.read('review.json'))[0]
+                self.assertEqual(evidence.read('TXT/' + row['backup']), txt.read_bytes())
+
     def test_ivs_json_loading_and_list_checkbox(self):
         from core.models import DefectRecord
         from core.ivs import records_to_json

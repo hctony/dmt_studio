@@ -13,7 +13,8 @@ REVIEWABLE=UNRESOLVED|{'9999'}
 
 def mismatch_rows(summary):
     key='final_xout' if summary.get('mode')=='process' else 'xout_count'
-    return [row for row in summary.get('per_strip_rows',[]) if int(row.get(key,0))!=int(row.get('ski_xout_count',0))]
+    return [row for row in summary.get('per_strip_rows',[])
+            if row.get('whole_strip_awaiting_ski') or int(row.get(key,0))!=int(row.get('ski_xout_count',0))]
 
 def review_binding(summary):
     trace=summary.get('_original_report_trace',summary.get('report_trace',{}))
@@ -76,6 +77,14 @@ def prepare_summary(summary):
     total=summary['gross_total_units']-ot14;ng=summary['gross_defective_units']-ot14
     summary['report_policy_errors']=[] if 0<=ng<=total else ['OT14_EXCLUSION_INVALID']
     summary['report_policy_errors'].extend(summary.get('rework_scope_errors',[]))
+    from core.i18n import _
+    awaiting = sorted({row['strip_id'] for row in summary.get('whole_strip_review', [])
+                       if row['status'] == 'awaiting_ski'})
+    if awaiting:
+        summary['report_policy_errors'].append(_('Skipdata를 갱신하고 최신 SKI로 다시 계산하세요.') + ': ' + ', '.join(awaiting))
+    if summary.get('whole_strip_unverified'):
+        summary['report_policy_errors'].append(_('검증용 TXT를 제외하면 유효한 공정 TXT가 없는 Strip') + ': ' +
+                                               ', '.join(summary['whole_strip_unverified']))
     if any(a['reason']=='DUMMY_CODE_CONFLICT' for a in summary.get('dummy_alarms',[])):
         summary['report_policy_errors'].append('DUMMY_CODE_CONFLICT')
     missing=[r['strip_id'] for r in summary.get('inspection_coverage',[]) if r['no_result_block'] and r.get('required_result',True)]

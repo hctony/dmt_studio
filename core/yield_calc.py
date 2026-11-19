@@ -511,17 +511,13 @@ def calculate_yield_summary(
     return calculate_yield_summary_many([txt_path], strip_json_path, units_per_strip, xout_limit, skipdata_path)
 
 
-def _full_txt_coords_outside_ski(
-    coords: set[tuple[int, int]], ski_coords: set[tuple[int, int]], units_per_strip: int
-) -> set[tuple[int, int]]:
-    if not 0 < len(ski_coords) < units_per_strip or len(coords) != units_per_strip:
-        return set()
+def _is_full_txt_grid(coords: set[tuple[int, int]], units_per_strip: int) -> bool:
+    if not coords or len(coords) != units_per_strip:
+        return False
     # Whole-strip exports cover every coordinate in a one-based rectangular grid.
     width = max(x for x, _ in coords)
     height = max(y for _, y in coords)
-    if width * height != units_per_strip or any(x < 1 or y < 1 for x, y in coords):
-        return set()
-    return coords - ski_coords
+    return width * height == units_per_strip and all(x >= 1 and y >= 1 for x, y in coords)
 
 
 def _calculate_yield_summary_many(
@@ -536,12 +532,17 @@ def _calculate_yield_summary_many(
     dummy_codes=getattr(ivs_dummy_scrap_strips,'codes',{})
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     skipdata = load_skipdata_folder(skipdata_path)
-    ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     from core.report_trace import ReportTrace
+    from core.whole_strip_review import WholeStripReview
     legacy_trace=ReportTrace({'VRS':txt_paths},[],skipdata_path,ski_path)
+    scrap_review = WholeStripReview(ski_path, legacy_trace.versions.get(str(ski_path)))
+    ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     legacy_sources={};load_skipdata_folder(skipdata_path,legacy_sources);legacy_trace.set_bbt_sources(legacy_sources)
     blocks: dict[str, YieldStripBlock] = {}
     excluded_txt_lines: dict[str, list[str]] = defaultdict(list)
+    eligible_txt_strips: set[str] = set()
+    archived_txt_strips: set[str] = set()
+    awaiting_ski_strips: set[str] = set()
     vrs_fvi_merged_strips: set[str] = set()
     for txt_path in txt_paths:
         parsed = parse_yield_txt(txt_path)
@@ -553,12 +554,20 @@ def _calculate_yield_summary_many(
             target.source_files.add(source)
             target.duplicate_in_source_count += block.duplicate_in_source_count
             target.block_count += block.block_count
-            outside_ski = _full_txt_coords_outside_ski(
-                gather_line_coords(block.defect_lines), ski_map.get(strip_id, set()), units_per_strip
-            ) if strip_id in ski_map else set()
+            ski_coords = ski_map.get(strip_id, set())
+            status = None
+            if _is_full_txt_grid(gather_line_coords(block.defect_lines), units_per_strip):
+                status = scrap_review.check(strip_id, 'VRS', source, legacy_trace.versions[source], len(ski_coords), units_per_strip)
+            if status == 'archived':
+                archived_txt_strips.add(strip_id)
+                excluded_txt_lines[strip_id].extend(block.defect_lines)
+                continue
+            eligible_txt_strips.add(strip_id)
+            if status == 'awaiting_ski':
+                awaiting_ski_strips.add(strip_id)
             for line in block.defect_lines:
-                if outside_ski and (
-                    parse_xy_from_gather_line(line) in outside_ski or parse_gather_code(line) == "170"
+                if status == 'awaiting_ski' and (
+                    parse_xy_from_gather_line(line) not in ski_coords or parse_gather_code(line) == "170"
                 ):
                     excluded_txt_lines[strip_id].append(line)
                     continue
@@ -663,6 +672,7 @@ def _calculate_yield_summary_many(
         per_strip_rows.append(
             {
                 "strip_id": strip_id,
+                "whole_strip_awaiting_ski": strip_id in awaiting_ski_strips,
                 "xout_count": effective_xout_count,
                 "ski_xout_count": ski_defects,
                 "ski_status": "허용수초과 스트립" if ski_defects == units_per_strip else "검증",
@@ -714,6 +724,8 @@ def _calculate_yield_summary_many(
         "clean_txt_strip_count": len(clean_txt_strips),
         "clean_txt_strips": clean_txt_strips,
         "report_trace":legacy_trace.snapshot(),
+        "whole_strip_review": scrap_review.rows,
+        "whole_strip_unverified": sorted(archived_txt_strips - eligible_txt_strips),
         "txt_only_strips": txt_only_strips,
         "missing_strips": missing_strips,
         "strip_json_validation": validation,
@@ -834,11 +846,13 @@ def _calculate_yield_summary_by_process(
     bbt_sources = {}
     bbt_map = load_skipdata_folder(skipdata_path, bbt_sources)
     bbt_code_map = load_skipdata_code_folder(skipdata_path)
-    ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     ivs_origins = {}
     from core.report_trace import file_version
+    from core.whole_strip_review import WholeStripReview
     watched_paths=list(vrs_paths)+list(fvi_paths)+list(ivs_paths or [])+list(ivs_json_paths or [])+([ski_path] if ski_path else [])
     input_versions={str(p):file_version(p) for p in watched_paths}
+    scrap_review = WholeStripReview(ski_path, input_versions.get(str(ski_path)))
+    ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins, include_history=True)
     from core.its_validation import load_history,validate_strip,source_metadata
     from core.collection import reports_for_inputs
@@ -908,9 +922,6 @@ def _calculate_yield_summary_by_process(
     from core.inspection_coverage import build as build_coverage
     required_coverage=expected_strip_ids|set(its_history)|set(ivs_records_by_strip)
     rpt_coverage={strip for strip in bbt_map if not json_lot_id or strip.startswith(json_lot_id.upper())}
-    coverage=build_coverage(required_coverage|rpt_coverage,
-                            {p:process_blocks.get(p,{}) for p in ('IVS','VRS','FVI')})
-    for row in coverage:row['required_result']=row['strip_id'] in required_coverage
     lot_id = lot_id_from_blocks(
         [block for blocks in process_blocks.values() for block in blocks.values()],
         json_lot_id,
@@ -946,6 +957,8 @@ def _calculate_yield_summary_by_process(
     xout_consistency_rows: list[dict] = []
     report_ski_total_units = 0
     its_audits=[]
+    archived_by_process: dict[str, set[str]] = defaultdict(set)
+    unverified_scrap_strips: list[str] = []
 
     for strip_id in sorted(expected_strip_ids):
         bbt_coords = set(bbt_map.get(strip_id, set()))
@@ -966,16 +979,27 @@ def _calculate_yield_summary_by_process(
         txt_coords = {process: set().union(*codes.values()) for process, codes in txt_codes.items()}
         xml_x_count = infer_x_count_for_strip(units_per_strip, [bbt_coords, ski_coords_for_strip, *txt_coords.values()])
         limited_full_txt = False
+        awaiting_ski = False
         for process, coords in txt_coords.items():
-            outside_ski = _full_txt_coords_outside_ski(coords, ski_coords_for_strip, units_per_strip)
-            if outside_ski:
+            if not _is_full_txt_grid(coords, units_per_strip):
+                continue
+            source = process_selected_sources[process][strip_id]
+            status = scrap_review.check(strip_id, process, source, input_versions[source], len(ski_coords_for_strip), units_per_strip)
+            if status == 'archived':
+                archived_by_process[process].add(strip_id)
+                txt_codes[process] = {}
                 limited_full_txt = True
+            elif status == 'awaiting_ski':
+                limited_full_txt = True
+                awaiting_ski = True
                 # A generated 170 fill cannot establish the reason for a retained SKI defect.
                 txt_codes[process] = {
                     code: retained
                     for code, positions in txt_codes[process].items()
                     if code != "170" and (retained := positions & ski_coords_for_strip)
                 }
+        if present_processes and all(strip_id in archived_by_process[p] for p in present_processes):
+            unverified_scrap_strips.append(strip_id)
 
         by_process_code: dict[str, dict[str, set[tuple[int, int]]]] = {}
         merged_by_code: dict[str, set[tuple[int, int]]] = defaultdict(set)
@@ -1007,7 +1031,9 @@ def _calculate_yield_summary_by_process(
         if strip_id in its_history:
             epoch=its_history[strip_id]
             raw=txt_codes
-            stamps={stage:blocks[strip_id].source_mtime for stage,blocks in process_blocks.items() if strip_id in blocks}
+            stamps={stage:blocks[strip_id].source_mtime for stage,blocks in process_blocks.items()
+                    if strip_id in blocks and strip_id not in archived_by_process[stage]}
+            raw = {stage: codes for stage, codes in raw.items() if stage in stamps}
             xml_mapping_valid=True
             for record in ivs_records_by_strip.get(strip_id,[]):
                 if record.is_dummy:continue
@@ -1239,6 +1265,7 @@ def _calculate_yield_summary_by_process(
             {
                 "strip_id": strip_id,
                 "final_xout": effective_final_xout,
+                "whole_strip_awaiting_ski": awaiting_ski,
                 "ski_xout_count": ski_defects,
                 "ski_status": "허용수초과 스트립" if ski_defects == units_per_strip else "검증",
                 "bbt_count": len(bbt_coords),
@@ -1301,12 +1328,22 @@ def _calculate_yield_summary_by_process(
     merged_process_defect_distribution = merge_process_code_distribution(process_code_distribution)
     split_added_distribution = split_170_added_distribution(process_code_distribution)
     dummy_9999_sm03_units = 0  # obsolete synthetic code; new codes retain their exact identity
+    coverage = build_coverage(required_coverage | rpt_coverage, {
+        stage: {strip: block for strip, block in process_blocks.get(stage, {}).items()
+                if strip not in archived_by_process[stage]}
+        for stage in ('IVS', 'VRS', 'FVI')
+    })
+    for row in coverage:
+        row['required_result'] = row['strip_id'] in required_coverage
     return {
         "mode": "process",
+        "whole_strip_review": scrap_review.rows,
+        "whole_strip_unverified": unverified_scrap_strips,
         "txt_first": txt_first,
         "xml_followup_evidence": followup_evidence,
         "xml_followup_inputs": {
-            stage: {strip: {'time': block.source_mtime} for strip, block in blocks.items()}
+            stage: {strip: {'time': block.source_mtime} for strip, block in blocks.items()
+                    if strip not in archived_by_process[stage]}
             for stage, blocks in process_blocks.items()
         } if txt_first else {},
         "dummy_codes":dummy_codes,
