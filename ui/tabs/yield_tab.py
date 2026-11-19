@@ -3,6 +3,7 @@ from __future__ import annotations
 from core.i18n import _
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -462,6 +463,7 @@ class YieldTab(QWidget):
                     ski_path,
                     self.get_process_filters(),
                     ivs_dummy_scrap_strips,
+                    txt_first=not ivs_json_paths,
                 )
             else:
                 self.summary = calculate_yield_summary_many(
@@ -776,6 +778,13 @@ class YieldTab(QWidget):
             high = result.get("high_rate_codes", [])
             if high:
                 msg += f"\n{_('3% 이상 불량')}: " + ", ".join(high)
+            if self.summary.get('txt_first') and self.summary.get('total_strips'):
+                from core.xml_followup import enqueue
+                try:
+                    enqueue(self.model_in.text().strip(), self.summary, high)
+                    msg += '\n' + _('후속 XML 검증이 대기열에 등록되었습니다.')
+                except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+                    msg += '\n' + _('후속 XML 검증 등록 실패') + ': ' + str(error)
             QMessageBox.information(self, _("1차 성적서 생성 완료"), msg)
         else:
             QMessageBox.critical(self, _("에러 발생"), result.get("error", "Unknown error"))

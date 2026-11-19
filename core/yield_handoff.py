@@ -77,9 +77,11 @@ def remember(model: str, lot: str, *, payload=None, kind='', output=None, config
                     'strips':config.get('source_history',{}),'collection_receipt':config.get('collection_receipt')},ensure_ascii=False))
             updates[kind.lower() + '_txt_in'] = str(target.resolve())
         if config is not None:
-            units = int(config['x_count']) * int(config['y_count'])
+            x_count, y_count = int(config['x_count']), int(config['y_count'])
+            units = x_count * y_count
             if units > 0:
                 updates['units_per_strip_in'] = str(units)
+                entry['gathering_grid'] = [x_count, y_count]
             updates['xout_limit_in'] = str(config['allowance'])
             updates['skipdata_in'] = config.get('skipdata_path', '')
             updates['ski_in'] = config.get('ski_path', '')

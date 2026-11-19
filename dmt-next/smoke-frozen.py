@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory() as data:
         capture_output=True, env=dict(os.environ,DMT_DATA_DIR=data,QT_QPA_PLATFORM='offscreen'),cwd=data,timeout=45)
     assert result.returncode == 0, result.stderr
     messages = {r['id']:r for line in result.stdout.splitlines() if (r:=json.loads(line)).get('id')}
-    assert len(messages[1]['result']['root']['labels']) == 11, messages
+    assert len(messages[1]['result']['root']['labels']) == 12, messages
     assert messages[2]['result']['successfulLots'] == 0, messages
     assert messages[2]['result']['preferences']['autofill'] is False, messages
     assert messages[3]['result']['count'] == 1, messages
@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory() as data:
     saved = json.loads((Path(data)/'gui-inputs.json').read_text(encoding='utf-8'))
     assert saved['6/YieldTab:/xout_limit_in'] == '18', saved
     assert saved['6/YieldTab:/vrs_txt_in'] == r'Z:\Taiwan\LOT.txt', saved
-    print('Packaged backend: 11 tabs, LOT workflow, original model JSON import OK')
+    print('Packaged backend: 12 tabs, LOT workflow, original model JSON import OK')
 
 # Exercise lazy imports and the asynchronous evidence reader in the frozen app,
 # not just the source interpreter. No production NAS connection is required.

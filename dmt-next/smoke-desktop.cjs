@@ -10,7 +10,7 @@ app.whenReady().then(async()=>{
   let win;for(let i=0;i<100;i++){win=BrowserWindow.getAllWindows()[0];if(win&&!win.webContents.isLoading())break;await delay(100);}
   await delay(1000);
   const initial=await win.webContents.executeJavaScript('window.studio.snapshot()');
-  if(initial.root.labels.length!==11)throw new Error('Missing tabs');
+  if(initial.root.labels.length!==12)throw new Error('Missing tabs');
   for(let i=0;i<11;i++){
    await win.webContents.executeJavaScript(`window.studio.action({id:${JSON.stringify(initial.root.id)},action:'tab',value:${i}})`);
    await delay(100);
@@ -20,6 +20,10 @@ app.whenReady().then(async()=>{
   await win.webContents.executeJavaScript("document.getElementById('language').value='zh-TW';document.getElementById('language').dispatchEvent(new Event('change'))");
   const translated=await win.webContents.executeJavaScript("document.getElementById('title').textContent");
   if(translated!=='作業員檢驗履歷')throw new Error('History tab translation failed: '+translated);
+  await win.webContents.executeJavaScript(`window.studio.action({id:${JSON.stringify(initial.root.id)},action:'tab',value:11})`);
+  await delay(150);
+  const xmlHistory=await win.webContents.executeJavaScript("document.getElementById('title').textContent");
+  if(xmlHistory!=='後續 XML 驗證履歷')throw new Error('XML history tab translation failed: '+xmlHistory);
   const originalPath='C:\\검사 통계\\수율 계산.xml';
   const literalTable={type:'table',id:'literal-history-test',headers:['작업자','원본 경로'],rows:[['테스트',originalPath]],start:0,total:1,selected:0,literalCells:true};
   const cells=await win.webContents.executeJavaScript(`Array.from(render(${JSON.stringify(literalTable)}).querySelectorAll('tbody td'),td=>td.textContent)`);

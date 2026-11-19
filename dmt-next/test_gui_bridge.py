@@ -46,7 +46,7 @@ class GuiTests(unittest.TestCase):
             if not w:return []
             return [w]+sum([walk(c) for c in w.get('children',[])],[])+walk(w.get('content'))
         total=0
-        for i in range(11):
+        for i in range(12):
             self.tab(i);s=self.c.snapshot();nodes=walk(s['root']['content'])
             self.assertTrue(any(w['type']=='button' for w in nodes),i)
             total+=sum(w['type']=='button' for w in nodes)

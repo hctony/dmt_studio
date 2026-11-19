@@ -29,11 +29,12 @@ class IvsScanThread(QThread):
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, model: str, lot: str, trial_path: str = "", units_per_strip=None):
+    def __init__(self, model: str, lot: str, trial_path: str = "", units_per_strip=None, *, verification_scope=None):
         super().__init__()
         self.model = model
         self.lot = lot
         self.trial_path = trial_path
+        self.verification_scope = verification_scope
         self._cancel = threading.Event()
         self._ssh = None
         from core.ivs_population import model_units
@@ -64,7 +65,7 @@ class IvsScanThread(QThread):
             requested=parse_trial_context(self.trial_path) if self.trial_path.strip() else None
             scope_model=requested.model if requested else self.model
             scope_lot=requested.lot if requested else self.lot
-            scope=load_scope(scope_model,scope_lot)
+            scope=load_scope(scope_model,scope_lot) if self.verification_scope is None else self.verification_scope
             if scope.get('enabled') and scope.get('reuse_xml'):
                 from core.yield_handoff import context
                 from core.ivs import latest_payload

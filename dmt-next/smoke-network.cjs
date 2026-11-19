@@ -52,8 +52,24 @@ app.whenReady().then(async()=>{try{
  let saved;for(let n=0;n<100;n++){const e=await api(0,'/api/events?after=0');saved=e.events.find(e=>e.event==='dialog'&&e.dialog.kind==='message'&&e.dialog.id>dialog.id)?.dialog;if(saved)break;await delay(50);}assert(saved);await rpc(0,'dialog.reply',{id:saved.id,value:1024});await exporting;
  const files=await api(0,'/api/files');assert(files.some(f=>f.name==='remote-yield.json'));const download=await fetch(base+'/api/download?name=remote-yield.json',{headers:{Authorization:'Bearer '+tokens[0].token}});const summary=await download.json();assert.equal(summary.total_units,4);assert.equal((await api(1,'/api/files')).length,0);
  const archive=await api(0,'/api/archive',{});const zip=await(await fetch(base+'/api/download?name='+encodeURIComponent(archive.name),{headers:{Authorization:'Bearer '+tokens[0].token}})).arrayBuffer();assert.equal(Buffer.from(zip).readUInt16LE(),0x4b50);
+ // Seed a finished A-PC verification without connecting the test to a NAS.
+ const {DatabaseSync}=require('node:sqlite');
+ const historyDir=path.join(root,'xml-followup');fs.mkdirSync(historyDir,{recursive:true});
+ const historyDb=new DatabaseSync(path.join(historyDir,'history.sqlite'));
+ historyDb.exec('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, model TEXT, lot TEXT, created REAL, updated REAL, status TEXT, baseline TEXT, details TEXT, xml TEXT)');
+ const historyTime=Date.now()/1000;
+ historyDb.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)').run('fixture','A-MODEL','RX-HISTORY',historyTime,historyTime,'difference',JSON.stringify({strips:['RX-HISTORY-01'],total_units:8}),JSON.stringify({xml_only:['RX-HISTORY-02']}),'');
+ historyDb.close();
+ for(const index of [0,1]){
+  const state=await rpc(index,'gui.snapshot');
+  await rpc(index,'gui.action',{id:state.root.id,action:'tab',value:11});
+  const history=await rpc(index,'gui.snapshot');
+  assert(walk(history.root).some(w=>w.type==='table'&&w.rows.some(row=>row.includes('RX-HISTORY')&&row.includes('차이 발견'))));
+  assert(walk(history.root).some(w=>w.type==='text'&&w.text.includes('RX-HISTORY-02')));
+  await rpc(index,'gui.action',{id:state.root.id,action:'tab',value:6});
+ }
  const browser=new BrowserWindow({show:false,webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,offscreen:true,backgroundThrottling:false}});await browser.loadURL(base);await browser.webContents.executeJavaScript(`document.querySelector('.overlay input[type=password]').value=${JSON.stringify(tokens[0].token)};document.querySelector('.overlay form').requestSubmit()`);
- for(let n=0;n<150;n++){if(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"))break;await delay(100);}assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"));
+ for(let n=0;n<150;n++){if(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===12"))break;await delay(100);}assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===12"));
  assert(await browser.webContents.executeJavaScript("localStorage.setItem('language','zh-TW');lang='zh-TW';labels();paint(true);document.querySelector('#navigation').textContent.includes('IVS 分析/查詢')"));
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('details.group button')).some(b=>b.textContent.includes('remote-yield.json'))"))break;await delay(100);}
  const destination=path.join(root,'browser-download.json');const downloaded=new Promise(resolve=>browser.webContents.session.once('will-download',(_e,item)=>{item.setSavePath(destination);item.once('done',(_e,state)=>resolve(state));}));await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('details.group button')).find(b=>b.textContent.includes('remote-yield.json')).click()");assert.equal(await downloaded,'completed');assert.equal(JSON.parse(fs.readFileSync(destination)).total_units,4);
@@ -134,7 +150,7 @@ app.whenReady().then(async()=>{try{
  for(let n=0;n<150;n++){
   if(navigationCount&&!browser.webContents.isLoading()){
    const ready=await Promise.race([
-    browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11").catch(()=>false),
+    browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===12").catch(()=>false),
     delay(500).then(()=>false)
    ]);
    if(ready)break;
@@ -142,7 +158,7 @@ app.whenReady().then(async()=>{try{
   await delay(100);
  }
  assert(navigationCount>0);
- assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===11"));
+ assert(await browser.webContents.executeJavaScript("document.querySelectorAll('#navigation button').length===12"));
  assert.equal((await api(0,'/api/download?name=remote-yield.json')).total_units,4);
  console.log('B browser reconnected and retained its result');
  browser.destroy();

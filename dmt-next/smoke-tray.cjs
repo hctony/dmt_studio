@@ -12,7 +12,7 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 if(app.hasSingleInstanceLock())app.whenReady().then(async()=>{
  try{
   let win;for(let i=0;i<100;i++){win=BrowserWindow.getAllWindows()[0];if(win&&!win.webContents.isLoading())break;await delay(100);}
-  const initial=await win.webContents.executeJavaScript('window.studio.snapshot()');assert.equal(initial.root.labels.length,11);
+  const initial=await win.webContents.executeJavaScript('window.studio.snapshot()');assert.equal(initial.root.labels.length,12);
   assert(tray&&!tray.isDestroyed());win.close();await delay(150);assert(!win.isDestroyed()&&!win.isVisible());
   const child=spawn(process.execPath,[__filename,'--secondary'],{windowsHide:true,stdio:'ignore',env:process.env});
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{child.kill();reject(new Error('Duplicate instance did not exit'));},10000);child.once('exit',code=>{clearTimeout(timer);code===0?resolve():reject(new Error('Duplicate failed: '+code));});child.once('error',reject);});

@@ -46,7 +46,7 @@ app.whenReady().then(async()=>{
   if(process.env.DMT_COLLECTOR_TOKEN)privateValues.push(process.env.DMT_COLLECTOR_TOKEN);
   try{recentPaths=JSON.parse(await fs.readFile(path.join(app.getPath('userData'),'dialog-paths.json'),'utf8'));}catch{}
   try{for(const line of (await fs.readFile(path.join(app.getPath('userData'),'.env'),'utf8')).split(/\r?\n/))if(line.startsWith('DMT_NAS_PASSWORD='))privateValues.push(line.slice(line.indexOf('=')+1).trim().replace(/^['"]|['"]$/g,''));}catch{}
-  gui=new GuiClient(onEvent,{diagnostics,label:'A'});
+  gui=new GuiClient(onEvent,{diagnostics,label:'A',env:{DMT_XML_QUEUE:'1'}});
   measurement=new Measurement(app.getPath('userData'));
   network=new NetworkServer({root:app.getPath('userData'),uiDir:path.join(__dirname,'ui'),createClient:(event,options)=>new GuiClient(event,{...options,diagnostics,label:path.basename(options.dataDir)}),seed:()=>gui.call('gui.export-settings'),local:gui,measurement,diagnostics,version:app.getVersion()});
   await network.initialize();

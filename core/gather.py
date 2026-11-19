@@ -395,11 +395,12 @@ def load_latest_process_blocks(
     its_history: dict | None = None,
     ski_time: float = 0,
     rework_scope: dict | None = None,
+    txt_first: bool = False,
 ) -> tuple[dict[str, GatherStrip], int]:
     merged: dict[str, GatherStrip] = {}
     replaced_count = 0
     for txt_path in sorted(txt_paths, key=lambda path: (path.stat().st_mtime, str(path))):
-        parsed = parse_gather_file(txt_path, lot_id)
+        parsed = parse_gather_file(txt_path, lot_id, latest_only=txt_first)
         from core.its_validation import source_clock_map
         clocks=source_clock_map(txt_path)
         for strip_id, item in parsed.items():
@@ -424,7 +425,7 @@ def load_latest_process_blocks(
                 merged[strip_id.upper()] = candidate
                 if selected_sources is not None:
                     selected_sources[strip_id.upper()] = str(txt_path)
-            elif (candidate.source_mtime>=target.source_mtime if epoch or (rework_scope or {}).get('enabled') else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)):
+            elif (candidate.source_mtime>=target.source_mtime if txt_first or epoch or (rework_scope or {}).get('enabled') else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)):
                 candidate.sources = unique_lines(target.sources + candidate.sources)
                 candidate.replaced_count += target.replaced_count + 1
                 merged[strip_id.upper()] = candidate

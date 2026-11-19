@@ -805,6 +805,7 @@ def _calculate_yield_summary_by_process(
     ski_path: Path | None = None,
     filters: list[str] | None = None,
     ivs_dummy_scrap_strips: set[str] | None = None,
+    txt_first: bool = False,
 ) -> dict:
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     ivs_dummy_scrap_strips = ivs_dummy_scrap_strips or set()
@@ -858,7 +859,7 @@ def _calculate_yield_summary_by_process(
             continue
         selected = {}
         blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected, its_history,
-            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0,rework_scope) if paths else ({}, 0)
+            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0,rework_scope,txt_first) if paths else ({}, 0)
         process_selected_sources[process] = selected
         process_blocks[process] = blocks
         process_replaced[process] = replaced
@@ -878,9 +879,10 @@ def _calculate_yield_summary_by_process(
         detail['status']=_('최신 XML Dummy 지정 코드 적용 · SKI 좌표 검증 필요')
         detail['code']=dummy_codes.get(detail['strip_id'],'')
     observed_strip_ids = gather_strip_ids | ivs_dummy_scrap_strips
-    population_ids = verified_population_ids(strip_json_path, units_per_strip)
+    population_ids = set() if txt_first else verified_population_ids(strip_json_path, units_per_strip)
     expected_strip_ids = observed_strip_ids | population_ids
     report_trace.selected_strip_ids=expected_strip_ids
+    followup_evidence = {}
     from core.inspection_coverage import build as build_coverage
     required_coverage=expected_strip_ids|set(its_history)|set(ivs_records_by_strip)
     rpt_coverage={strip for strip in bbt_map if not json_lot_id or strip.startswith(json_lot_id.upper())}
@@ -946,7 +948,7 @@ def _calculate_yield_summary_by_process(
                 for record in ivs_records_by_strip.get(strip_id,[]):
                     coord=unit_idx_to_xy(record.unit_idx,xml_x_count)
                     if record.is_rate_defect and coord:by_code.setdefault(record.ivs_1,set()).add(coord)
-            if strip_id in its_history:by_code.pop('9998',None)
+            if txt_first or strip_id in its_history:by_code.pop('9998',None)
             by_process_code[process] = by_code
             merge_code_coords(merged_by_code, by_code)
             process_coords = set().union(*by_code.values()) if by_code else set()
@@ -964,6 +966,8 @@ def _calculate_yield_summary_by_process(
             units_per_strip,
             [bbt_coords, gather_coords, ski_coords_for_strip],
         )
+        if txt_first:
+            followup_evidence[strip_id] = {'coords': sorted(final_coords), 'width': x_count_for_strip}
         if strip_id in its_history:
             epoch=its_history[strip_id]
             raw={stage:coords_by_code(blocks[strip_id].defect_lines) for stage,blocks in process_blocks.items() if strip_id in blocks}
@@ -1263,6 +1267,12 @@ def _calculate_yield_summary_by_process(
     dummy_9999_sm03_units = 0  # obsolete synthetic code; new codes retain their exact identity
     return {
         "mode": "process",
+        "txt_first": txt_first,
+        "xml_followup_evidence": followup_evidence,
+        "xml_followup_inputs": {
+            stage: {strip: {'time': block.source_mtime} for strip, block in blocks.items()}
+            for stage, blocks in process_blocks.items()
+        } if txt_first else {},
         "dummy_codes":dummy_codes,
         "dummy_alarms":dummy_alarms,
         "inspection_coverage":coverage,
