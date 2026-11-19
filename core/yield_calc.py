@@ -511,6 +511,19 @@ def calculate_yield_summary(
     return calculate_yield_summary_many([txt_path], strip_json_path, units_per_strip, xout_limit, skipdata_path)
 
 
+def _full_txt_coords_outside_ski(
+    coords: set[tuple[int, int]], ski_coords: set[tuple[int, int]], units_per_strip: int
+) -> set[tuple[int, int]]:
+    if not 0 < len(ski_coords) < units_per_strip or len(coords) != units_per_strip:
+        return set()
+    # Whole-strip exports cover every coordinate in a one-based rectangular grid.
+    width = max(x for x, _ in coords)
+    height = max(y for _, y in coords)
+    if width * height != units_per_strip or any(x < 1 or y < 1 for x, y in coords):
+        return set()
+    return coords - ski_coords
+
+
 def _calculate_yield_summary_many(
     txt_paths: list[Path],
     strip_json_path: Path | None,
@@ -528,6 +541,7 @@ def _calculate_yield_summary_many(
     legacy_trace=ReportTrace({'VRS':txt_paths},[],skipdata_path,ski_path)
     legacy_sources={};load_skipdata_folder(skipdata_path,legacy_sources);legacy_trace.set_bbt_sources(legacy_sources)
     blocks: dict[str, YieldStripBlock] = {}
+    excluded_txt_lines: dict[str, list[str]] = defaultdict(list)
     vrs_fvi_merged_strips: set[str] = set()
     for txt_path in txt_paths:
         parsed = parse_yield_txt(txt_path)
@@ -539,7 +553,15 @@ def _calculate_yield_summary_many(
             target.source_files.add(source)
             target.duplicate_in_source_count += block.duplicate_in_source_count
             target.block_count += block.block_count
+            outside_ski = _full_txt_coords_outside_ski(
+                gather_line_coords(block.defect_lines), ski_map.get(strip_id, set()), units_per_strip
+            ) if strip_id in ski_map else set()
             for line in block.defect_lines:
+                if outside_ski and (
+                    parse_xy_from_gather_line(line) in outside_ski or parse_gather_code(line) == "170"
+                ):
+                    excluded_txt_lines[strip_id].append(line)
+                    continue
                 if line not in target.defect_lines:
                     target.defect_lines.append(line)
     dummy_9999_validation = classify_ivs_dummy_9999_strips(
@@ -631,7 +653,7 @@ def _calculate_yield_summary_many(
         codes={parse_xy_from_gather_line(line):parse_gather_code(line) for line in (block.defect_lines if block else [])}
         legacy_trace.strips[strip_id]={'x_count':width,'units_per_strip':units_per_strip,'is_scrap':is_scrap,
             'ski_coords':[list(c) for c in sorted(ski_coords)],'bbt_coords':[list(c) for c in sorted(bbt_coords)],
-            'processes':{'VRS':{'defect_lines':block.defect_lines if block else [],'sources':sorted(block.source_files) if block else []}},'ivs_records':[]}
+            'processes':{'VRS':{'defect_lines':block.defect_lines + excluded_txt_lines.get(strip_id, []) if block else [],'sources':sorted(block.source_files) if block else []}},'ivs_records':[]}
         for coord in targets:
             if coord in bbt_coords:code,process,reason='OT14','BBT','bbt'
             elif is_ivs_dummy_scrap:code,process,reason=dummy_codes.get(strip_id,'SM03_DUMMY9999'),'IVS','dummy_whole_strip'
@@ -927,6 +949,7 @@ def _calculate_yield_summary_by_process(
 
     for strip_id in sorted(expected_strip_ids):
         bbt_coords = set(bbt_map.get(strip_id, set()))
+        ski_coords_for_strip = set(ski_map.get(strip_id, set()))
         for rpt in bbt_sources.get(strip_id,[]):
             input_versions.setdefault(rpt,report_trace.versions.get(rpt))
         present_processes = [process for process, blocks in process_blocks.items() if strip_id in blocks]
@@ -936,14 +959,29 @@ def _calculate_yield_summary_by_process(
         if len(present_processes) == 1:
             only_by_process[present_processes[0]].append(strip_id)
 
+        txt_codes = {
+            process: coords_by_code(blocks[strip_id].defect_lines)
+            for process, blocks in process_blocks.items() if strip_id in blocks
+        }
+        txt_coords = {process: set().union(*codes.values()) for process, codes in txt_codes.items()}
+        xml_x_count = infer_x_count_for_strip(units_per_strip, [bbt_coords, ski_coords_for_strip, *txt_coords.values()])
+        limited_full_txt = False
+        for process, coords in txt_coords.items():
+            outside_ski = _full_txt_coords_outside_ski(coords, ski_coords_for_strip, units_per_strip)
+            if outside_ski:
+                limited_full_txt = True
+                # A generated 170 fill cannot establish the reason for a retained SKI defect.
+                txt_codes[process] = {
+                    code: retained
+                    for code, positions in txt_codes[process].items()
+                    if code != "170" and (retained := positions & ski_coords_for_strip)
+                }
+
         by_process_code: dict[str, dict[str, set[tuple[int, int]]]] = {}
-        xml_x_count=infer_x_count_for_strip(units_per_strip,[bbt_coords,set(ski_map.get(strip_id,set())),
-            set().union(*(gather_line_coords(blocks[strip_id].defect_lines) for blocks in process_blocks.values() if strip_id in blocks))])
         merged_by_code: dict[str, set[tuple[int, int]]] = defaultdict(set)
         process_coord_counts: dict[str, int] = {}
         for process, blocks in process_blocks.items():
-            block = blocks.get(strip_id)
-            by_code = coords_by_code(block.defect_lines) if block else {}
+            by_code = {code: set(coords) for code, coords in txt_codes.get(process, {}).items()}
             if process=='IVS' and strip_id in its_history:
                 for record in ivs_records_by_strip.get(strip_id,[]):
                     coord=unit_idx_to_xy(record.unit_idx,xml_x_count)
@@ -961,16 +999,14 @@ def _calculate_yield_summary_by_process(
         if bbt_coords:
             bbt_strip_count += 1
 
-        ski_coords_for_strip = set(ski_map.get(strip_id, set())) if ski_map else set()
-        x_count_for_strip = infer_x_count_for_strip(
-            units_per_strip,
-            [bbt_coords, gather_coords, ski_coords_for_strip],
+        x_count_for_strip = xml_x_count if limited_full_txt else infer_x_count_for_strip(
+            units_per_strip, [bbt_coords, gather_coords, ski_coords_for_strip]
         )
         if txt_first:
             followup_evidence[strip_id] = {'coords': sorted(final_coords), 'width': x_count_for_strip}
         if strip_id in its_history:
             epoch=its_history[strip_id]
-            raw={stage:coords_by_code(blocks[strip_id].defect_lines) for stage,blocks in process_blocks.items() if strip_id in blocks}
+            raw=txt_codes
             stamps={stage:blocks[strip_id].source_mtime for stage,blocks in process_blocks.items() if strip_id in blocks}
             xml_mapping_valid=True
             for record in ivs_records_by_strip.get(strip_id,[]):

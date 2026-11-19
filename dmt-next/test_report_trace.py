@@ -11,7 +11,8 @@ from core.models import DefectRecord,TrialContext
 from core.report_codes import ordered_report_codes
 from core.report_trace import trace_rows,matching_groups
 from core.report_evidence import frozen_text,live_text,matching_refs,xml_excerpt
-from core.yield_calc import calculate_yield_summary_by_process,build_yield_report_aggregation
+from core.yield_calc import calculate_yield_summary_many,calculate_yield_summary_by_process,build_yield_report_aggregation
+from core.report_review import mismatch_rows
 from workers.report_workers import ReportEvidenceWorker
 
 
@@ -42,6 +43,42 @@ class ReportTraceTests(unittest.TestCase):
     def test_preview_uses_same_positive_code_counts_and_170_mapping_as_excel(self):
         ordered=ordered_report_codes({'final_defects_by_code_including_bbt':{'170':{'count':3},'OT06':{'count':2},'1111':{'count':1},'UNKNOWN':{'count':0}}})
         self.assertEqual(ordered,[('OT06',6)])
+
+    def test_full_txt_is_limited_to_partial_final_ski_in_both_yield_modes(self):
+        summary, report = self.fixture(
+            [(1, 1, 'SM03'), (2, 1, 'DR01'), (1, 2, '170'), (2, 2, '170')],
+            [(1, 1), (2, 1), (1, 2)], bbt=[(1, 2)],
+        )
+        legacy = calculate_yield_summary_many(
+            [self.root / 'gather.txt'], None, 4, 2, self.root / 'bbt', self.root / 'final.ski',
+        )
+        for result, final in ((summary, report), (legacy, build_yield_report_aggregation(legacy, 'MODEL'))):
+            with self.subTest(mode=result.get('mode', 'legacy')):
+                self.assertEqual(mismatch_rows(result), [])
+                self.assertEqual(result['gross_defective_units'], 3)
+                self.assertEqual(result['defective_units'], 2)
+                self.assertEqual(dict(ordered_report_codes(final)), {'SM03': 1, 'DR01': 1})
+                self.assertEqual(result['report_code_distribution'].get('OT14'), 1)
+                source = result['report_trace']['strips'][self.strip]['processes']['VRS']
+                self.assertTrue(any(',2,2,T,170' in line for line in source['defect_lines']))
+
+    def test_partial_txt_outside_ski_still_requires_review(self):
+        summary, _ = self.fixture([(1, 1, 'SM03'), (2, 1, 'DR01')], [(1, 1)])
+        self.assertEqual([row['strip_id'] for row in mismatch_rows(summary)], [self.strip])
+
+    def test_full_txt_fill_does_not_hide_a_real_code_in_another_process(self):
+        summary, _ = self.fixture(
+            [(1, 1, '170'), (2, 1, 'DR01'), (1, 2, 'SM03'), (2, 2, '170')],
+            [(1, 1), (2, 1), (1, 2)],
+        )
+        self.assertEqual(summary['report_code_distribution'], {'DR01': 1, 'SM03': 1, 'UNKNOWN': 1})
+        fvi = self.root / 'fvi.txt'
+        fvi.write_text(f'1,{self.lot},{self.strip}\n{self.lot},{self.strip},1,1,T,OT12\n{self.lot},{self.strip},EOS\n')
+        with_fvi = calculate_yield_summary_by_process(
+            [self.root / 'gather.txt'], [fvi], [], [], None, 4, 3, None, self.root / 'final.ski', None,
+        )
+        self.assertEqual(mismatch_rows(with_fvi), [])
+        self.assertEqual(with_fvi['report_code_distribution'], {'DR01': 1, 'SM03': 1, 'OT12': 1})
 
     def test_preview_counts_equal_the_actual_generated_excel_columns(self):
         from core.export_excel import export_report_to_2xlsx
