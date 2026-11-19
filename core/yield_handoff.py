@@ -82,7 +82,8 @@ def remember(model: str, lot: str, *, payload=None, kind='', output=None, config
             if units > 0:
                 updates['units_per_strip_in'] = str(units)
                 entry['gathering_grid'] = [x_count, y_count]
-            updates['xout_limit_in'] = str(config['allowance'])
+            allowance = config['allowance']
+            updates['xout_limit_in'] = '' if allowance is None else str(allowance)
             updates['skipdata_in'] = config.get('skipdata_path', '')
             updates['ski_in'] = config.get('ski_path', '')
         revision = uuid4().hex

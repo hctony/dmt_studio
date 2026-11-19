@@ -488,6 +488,10 @@ class GuiTests(unittest.TestCase):
                 self.assertIn('RXTEST-01', target.read_text())
                 self.assertTrue(target.with_suffix('.txt.its.json').is_file())
             self.assertEqual(existing.read_text(),'previous result')
+            yield_tab = self.tab(6)
+            self.assertEqual(yield_tab.xout_limit_in.text(), '')
+            self.action(yield_tab.btn_calc, 'click')
+            self.assertTrue(any(data.get('title')=='허용수 입력 필요' for kind,data in self.dialogs if kind=='message'))
 
     def test_batch_error_displays_incomplete_host_and_keeps_only_draft(self):
         from types import SimpleNamespace
@@ -520,9 +524,11 @@ class GuiTests(unittest.TestCase):
         gather = self.tab(3)
         with patch('ui.settings_helper.YIELD_MODEL_SETTINGS_PATH', settings):
             self.action(gather.model_in, 'input', 'MODEL-A')
-            self.assertEqual([w.text() for w in (gather.x_count_in,gather.y_count_in,gather.allowance_in)], ['12','5','9'])
+            self.assertEqual([w.text() for w in (gather.x_count_in,gather.y_count_in,gather.allowance_in)], ['12','5',''])
             gather.lot_in.setText('RXTEST-')
             gather.exclude_json_in.clear()
+            self.assertIsNone(gather.read_config()['allowance'])
+            gather.allowance_in.setText('9')
             config = gather.read_config()
             self.assertEqual((config['x_count'],config['y_count'],config['allowance'],config['fill_code']), (12,5,9,'170'))
             yield_tab = self.c.window.centralWidget().widget(6)
@@ -531,15 +537,15 @@ class GuiTests(unittest.TestCase):
             yield_tab.save_model_yield_settings()
             self.assertEqual(json.loads(settings.read_text())['MODEL-A']['x_count'], '12')
             self.action(gather.model_in, 'input', 'LEGACY')
-            self.assertEqual([w.text() for w in (gather.x_count_in,gather.y_count_in,gather.allowance_in)], ['','','0'])
+            self.assertEqual([w.text() for w in (gather.x_count_in,gather.y_count_in,gather.allowance_in)], ['','',''])
 
-    def test_nas_handler_sets_coordinates_and_twenty_percent_allowance(self):
+    def test_nas_handler_sets_coordinates_and_leaves_allowance_blank(self):
         from core.nas_geometry import lookup
         repository = self.root / 'PxRepository'
         handler = repository / '7TEST-P93' / '2.0' / 'Line' / 'Top' / 'Top_handler.txt'
         handler.parent.mkdir(parents=True)
         handler.write_text('UnitRowNum=22\nUnitColNum=4\n', encoding='utf-16')
-        expected = {'x_count': 22, 'y_count': 4, 'units_per_strip': 88, 'xout_limit': 17}
+        expected = {'x_count': 22, 'y_count': 4, 'units_per_strip': 88}
         self.assertEqual(lookup('7TEST-P93', repository), (expected, str(handler)))
         tab = self.tab(3)
         tab.model_in.setText('7TEST-P93')
@@ -553,7 +559,7 @@ class GuiTests(unittest.TestCase):
                 self.app.processEvents()
                 time.sleep(.01)
             self.app.processEvents()
-            self.assertEqual([tab.x_count_in.text(),tab.y_count_in.text(),tab.allowance_in.text()], ['22','4','17'])
+            self.assertEqual([tab.x_count_in.text(),tab.y_count_in.text(),tab.allowance_in.text()], ['22','4',''])
             self.assertEqual(json.loads(settings.read_text())['7TEST-P93']['units_per_strip'], '88')
 
     def test_server_work_roots_use_local_inputs_and_legacy_ivs_range(self):

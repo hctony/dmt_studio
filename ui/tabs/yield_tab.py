@@ -117,7 +117,8 @@ class YieldTab(QWidget):
         self.skipdata_in = QLineEdit()
         self.ski_in = QLineEdit()
         self.units_per_strip_in = QLineEdit("88")
-        self.xout_limit_in = QLineEdit("13")
+        self.xout_limit_in = QLineEdit()
+        self.xout_limit_in.setPlaceholderText(_("사용자가 허용수를 입력하세요 (예: 18)"))
         restore_line_edit(self.model_in, "yield/model", DEFAULT_MODEL)
         self.restore_model_units()
         restore_line_edit(self.vrs_txt_in, "yield/vrs_txt_paths")
@@ -129,7 +130,6 @@ class YieldTab(QWidget):
         restore_line_edit(self.skipdata_in, "yield/skipdata")
         restore_line_edit(self.ski_in, "yield/ski")
         restore_line_edit(self.units_per_strip_in, "yield/units_per_strip", "88")
-        restore_line_edit(self.xout_limit_in, "yield/xout_limit", "13")
         self.restore_model_units()
         self.model_in.editingFinished.connect(self.restore_model_units)
         self.units_per_strip_in.editingFinished.connect(self.save_model_yield_settings)
@@ -426,6 +426,10 @@ class YieldTab(QWidget):
             QMessageBox.warning(self, _("입력 오류"), _("최종 SKI 파일을 선택하세요."))
             return
         try:
+            if not self.xout_limit_in.text().strip():
+                QMessageBox.warning(self, _("허용수 입력 필요"), _("3번 수율 계산에서 X-out 허용수를 입력한 뒤 다시 계산하세요."))
+                self.xout_limit_in.setFocus()
+                return
             units_per_strip = int(self.units_per_strip_in.text().strip())
             xout_limit = int(self.xout_limit_in.text().strip())
         except ValueError:

@@ -112,6 +112,8 @@ class Controller(C.QObject):
         except (ValueError,OSError): return
         for key,w in self.input_widgets():
             if key not in data: continue
+            if key.endswith('/GatheringTab:/allowance_in'):
+                continue
             value=data[key]
             if isinstance(w,W.QLineEdit): w.setText(str(value))
             elif isinstance(w,W.QComboBox): w.setCurrentText(str(value))

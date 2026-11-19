@@ -17,7 +17,7 @@ def handler_geometry(path):
             raise ValueError(f'{path.name}: {key}')
         values[key] = matches.pop()
     x, y = values['UnitRowNum'], values['UnitColNum']
-    return {'x_count': x, 'y_count': y, 'units_per_strip': x * y, 'xout_limit': x * y // 5}
+    return {'x_count': x, 'y_count': y, 'units_per_strip': x * y}
 
 
 def lookup(model, repository=None):

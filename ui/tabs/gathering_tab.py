@@ -579,7 +579,8 @@ class GatheringTab(QWidget):
         self.lot_in.setPlaceholderText(_("예: RX2262084400-"))
         self.x_count_in = QLineEdit("22")
         self.y_count_in = QLineEdit("4")
-        self.allowance_in = QLineEdit("13")
+        self.allowance_in = QLineEdit()
+        self.allowance_in.setPlaceholderText(_("비워 두면 3번 수율 계산에서 입력"))
         self.fill_code_in = QLabel(_("170 (성적서 OT06)"))
         self.exclude_codes_in = QLineEdit()
         self.exclude_codes_in.setPlaceholderText(_("예: 9998,SM04,170"))
@@ -591,7 +592,6 @@ class GatheringTab(QWidget):
         restore_line_edit(self.lot_in, "gathering/lot")
         restore_line_edit(self.x_count_in, "gathering/x_count", "22")
         restore_line_edit(self.y_count_in, "gathering/y_count", "4")
-        restore_line_edit(self.allowance_in, "gathering/allowance", "13")
         self.geometry_model = self.model_in.text().strip().casefold()
         self.restore_model_geometry()
         self.model_in.editingFinished.connect(self.restore_model_geometry)
@@ -600,7 +600,7 @@ class GatheringTab(QWidget):
         self.geometry_worker = None
         self.geometry_status = QLabel()
         self.geometry_status.setWordWrap(True)
-        self.btn_nas_geometry = QPushButton(_('NAS 좌표·허용수 불러오기'))
+        self.btn_nas_geometry = QPushButton(_('NAS X·Y 좌표 불러오기'))
         self.btn_nas_geometry.clicked.connect(lambda: self.ensure_nas_geometry(force=True))
         restore_line_edit(self.exclude_codes_in, "gathering/exclude_codes")
         restore_line_edit(self.exclude_json_in, "gathering/exclude_json")
@@ -907,6 +907,7 @@ class GatheringTab(QWidget):
         if self.model_in.text().strip().casefold() != model.casefold():
             return
         self.restore_model_geometry(profile)
+        self.allowance_in.clear()
         try:
             self.remember_geometry(model, profile)
         except OSError as error:
@@ -923,13 +924,15 @@ class GatheringTab(QWidget):
         changed = self.geometry_model != model.casefold()
         if profile is None:
             profile = gathering_model_settings(model)
-        for field, key in ((self.x_count_in, 'x_count'), (self.y_count_in, 'y_count'), (self.allowance_in, 'xout_limit')):
+        for field, key in ((self.x_count_in, 'x_count'), (self.y_count_in, 'y_count')):
             value = profile.get(key)
             if value not in (None, ''):
                 field.setText(str(value))
             elif changed:
                 field.clear()
         self.geometry_model = model.casefold()
+        if changed:
+            self.allowance_in.clear()
 
     @staticmethod
     def remember_geometry(model, profile):
@@ -945,16 +948,17 @@ class GatheringTab(QWidget):
     def read_config(self) -> Optional[dict]:
         self.ensure_nas_geometry()
         if self.geometry_worker and self.geometry_worker.isRunning():
-            QMessageBox.information(self, _("NAS 모델 수량 확인 중"), _("NAS 좌표·허용수가 표시되면 집계를 실행하세요."))
+            QMessageBox.information(self, _("NAS 모델 수량 확인 중"), _("NAS X·Y 좌표가 표시되면 집계를 실행하세요."))
             return None
         try:
             x_count = int(self.x_count_in.text().strip())
             y_count = int(self.y_count_in.text().strip())
-            allowance = int(self.allowance_in.text().strip())
+            allowance_text = self.allowance_in.text().strip()
+            allowance = int(allowance_text) if allowance_text else None
         except ValueError:
             QMessageBox.warning(self, _("입력 오류"), _("X/Y 좌표 수와 허용수는 숫자여야 합니다."))
             return None
-        if x_count <= 0 or y_count <= 0 or allowance < 0:
+        if x_count <= 0 or y_count <= 0 or (allowance is not None and allowance < 0):
             QMessageBox.warning(self, _("입력 오류"), _("X/Y는 1 이상, 허용수는 0 이상이어야 합니다."))
             return None
         lot = self.lot_in.text().strip()
@@ -974,8 +978,10 @@ class GatheringTab(QWidget):
                                 f" {x_count} × {y_count} ≠ {known_units}")
             return None
         if model:
-            self.remember_geometry(model, {'x_count': x_count, 'y_count': y_count,
-                                           'units_per_strip': x_count * y_count, 'xout_limit': allowance})
+            profile = {'x_count': x_count, 'y_count': y_count, 'units_per_strip': x_count * y_count}
+            if allowance is not None:
+                profile['xout_limit'] = allowance
+            self.remember_geometry(model, profile)
         excluded_codes = {code.strip() for code in re.split(r"[,;\s]+", self.exclude_codes_in.text()) if code.strip()}
         excluded_codes.difference_update({'170', 'OT06'})
         save_line_edit(self.model_in, "gathering/model")

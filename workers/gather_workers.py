@@ -39,7 +39,7 @@ class GatheringWorker(QThread):
         lot: str,
         x_count: int,
         y_count: int,
-        allowance: int,
+        allowance: int | None,
         fill_code: str,
         excluded_codes: set[str],
         excluded_strip_ids: set[str],
@@ -207,7 +207,7 @@ class GatheringWorker(QThread):
                     excluded_strip_count += 1
                     continue
                 item.defect_lines = [line for line in item.defect_lines if line.split(",")[-1].strip() not in self.excluded_codes]
-                if len(item.defect_lines) > self.allowance:
+                if self.allowance is not None and len(item.defect_lines) > self.allowance:
                     discarded_strip_count += 1
                     item.defect_lines = make_full_t_lines(self.lot, item.strip_id, self.x_count, self.y_count, self.fill_code, item.defect_lines)
                     item.xout_applied = True
