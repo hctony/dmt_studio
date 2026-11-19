@@ -150,6 +150,33 @@ BBT_LOOKUP_ROOT = r"D:\KINSUS DATA\Backup"
 SKI_LOOKUP_ROOT = r"D:\SkipData"
 
 
+def find_batch_lot_folder(model: str, lot: str, preferred: str = "") -> str:
+    """Find an unambiguous existing BBT backup folder for this model and LOT."""
+    from pathlib import Path
+    if not model.strip() or not lot.strip():
+        return ""
+    try:
+        root = Path(BBT_LOOKUP_ROOT).resolve(strict=True)
+        selected = Path(preferred).resolve() if preferred else None
+        model_key, lot_key = model.strip().upper(), lot.strip().upper()
+        matches = []
+        for folder in root.iterdir():
+            if folder.name.split('&', 1)[0].upper() != model_key or not folder.is_dir():
+                continue
+            resolved = folder.resolve()
+            if resolved.parent != root:
+                continue
+            if any(lot_key in rpt.name.upper() for rpt in folder.glob('*.rpt') if rpt.is_file()):
+                matches.append(resolved)
+        if selected in matches:
+            return str(selected)
+        if len(set(matches)) == 1:
+            return str(matches[0])
+    except OSError:
+        pass
+    return ""
+
+
 def auto_find_bbt_skipdata_path(lot: str) -> str:
     """Finds the BBT/Skipdata folder in D:\\KINSUS DATA\\Backup by matching the LOT number against .rpt files."""
     if not lot:

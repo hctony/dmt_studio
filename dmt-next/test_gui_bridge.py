@@ -449,6 +449,46 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(yield_tab.strip_json_in.text(),'')
         for mode in ('VRS','FVI','IVS'):self.assertTrue((output/f'Gather_{mode}_RX1234-.txt').is_file())
 
+    def test_batch_saves_in_matched_model_lot_folder_and_keeps_previous_export(self):
+        from workers.gather_workers import GatheringWorker
+        inputs = self.root / 'input'
+        inputs.mkdir()
+        (inputs/'source.txt').write_text('1,RXTEST-,RXTEST-01\nRXTEST-,RXTEST-01,EOS\n')
+        backup = self.root / 'Backup'
+        correct = backup / 'MODEL-Q&0075'
+        other = backup / 'OTHER&0001'
+        correct.mkdir(parents=True)
+        other.mkdir()
+        for folder in (correct, other):
+            (folder/'RXTEST-01.rpt').write_text('')
+        existing = correct/'Gather_VRS_RXTEST-.txt'
+        existing.write_text('previous result')
+        tab = self.tab(3)
+        tab.model_in.setText('MODEL-Q')
+        tab.lot_in.setText('RXTEST-')
+        tab.skipdata_in.setText(str(other))
+        tab.exclude_json_in.clear()
+        tab.ski_in.clear()
+        for flag in (tab.chk_vrs, tab.chk_fvi, tab.chk_ivs):
+            flag.setChecked(True)
+        with patch('core.utils.BBT_LOOKUP_ROOT', str(backup)), patch('core.yield_handoff.DATA_DIR', self.root), \
+             patch.object(GatheringWorker, 'build_paths', return_value=[inputs]):
+            self.action(tab.btn_batch_export, 'click')
+            deadline = time.monotonic()+8
+            while not tab.btn_batch_export.isEnabled() and time.monotonic()<deadline:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.assertTrue(tab.btn_batch_export.isEnabled())
+            tab.batch_dialog.close()
+            self.assertEqual(tab.batch_out_dir, correct)
+            self.assertEqual(tab.batch_config['skipdata_path'], str(correct))
+            self.assertFalse(any(kind=='directory' for kind, _data in self.dialogs))
+            for mode in ('VRS','FVI','IVS'):
+                target = correct/f'Gather_{mode}_RXTEST-{tab.batch_export_suffix}.txt'
+                self.assertIn('RXTEST-01', target.read_text())
+                self.assertTrue(target.with_suffix('.txt.its.json').is_file())
+            self.assertEqual(existing.read_text(),'previous result')
+
     def test_batch_error_displays_incomplete_host_and_keeps_only_draft(self):
         from types import SimpleNamespace
         tab = self.tab(3)

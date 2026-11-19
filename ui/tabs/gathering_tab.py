@@ -709,7 +709,19 @@ class GatheringTab(QWidget):
         if not config:
             return
             
-        out_dir = QFileDialog.getExistingDirectory(self, _("저장 폴더 선택"))
+        from core.utils import find_batch_lot_folder
+        out_dir = find_batch_lot_folder(config['model'], config['lot'], config['skipdata_path'])
+        if out_dir:
+            import os
+            if os.environ.get('DMT_REMOTE_SESSION') == '1':
+                from remote_paths import allowed_path
+                if not allowed_path(out_dir):
+                    out_dir = ''
+        automatic = bool(out_dir)
+        if automatic:
+            config['skipdata_path'] = out_dir
+        if not automatic:
+            out_dir = QFileDialog.getExistingDirectory(self, _("저장 폴더 선택"))
         if not out_dir:
             return
             
@@ -718,10 +730,21 @@ class GatheringTab(QWidget):
         self.batch_rework_scope = load_scope(config['model'], config['lot'])
         self.batch_modes = modes
         self.batch_out_dir = Path(out_dir)
+        self.batch_automatic_output = automatic
+        self.batch_export_suffix = ''
+        from core.utils import sanitize_filename
+        self.batch_file_lot = sanitize_filename(config['lot'])
+        if automatic and any((self.batch_out_dir / f"Gather_{mode}_{self.batch_file_lot}.txt").exists()
+                             for mode in modes):
+            from datetime import datetime
+            from uuid import uuid4
+            self.batch_export_suffix = datetime.now().strftime('_%Y%m%d-%H%M%S_') + uuid4().hex[:6]
         self.batch_current_idx = 0
         self.btn_batch_export.setEnabled(False)
         
         self.batch_dialog = BatchProgressDialog(modes, self)
+        if automatic:
+            self.batch_dialog.append_log(_('LOT 작업 폴더 자동 저장') + ': ' + out_dir)
         self.batch_dialog.show()
         
         self._run_next_batch()
@@ -782,9 +805,22 @@ class GatheringTab(QWidget):
             )
             self.batch_dialog.btn_close.setEnabled(True)
             return
-        out_file = self.batch_out_dir / f"Gather_{mode}_{lot}.txt"
+        filename = f"Gather_{mode}_{self.batch_file_lot}{self.batch_export_suffix}.txt"
+        out_file = self.batch_out_dir / filename
         from core.collection import write_export
-        write_export(out_file,output,context['source_history'],collection.get('receipt'))
+        try:
+            write_export(out_file, output, context['source_history'], collection.get('receipt'))
+            if self.batch_automatic_output:
+                import os
+                if os.environ.get('DMT_REMOTE_SESSION') == '1':
+                    from config import DATA_DIR
+                    download = DATA_DIR / 'outputs' / filename
+                    if download.resolve() != out_file.resolve():
+                        write_export(download, output, context['source_history'], collection.get('receipt'))
+        except OSError as error:
+            self.batch_dialog.btn_close.setEnabled(True)
+            self._on_batch_failed(str(error))
+            return
         if not getattr(self.batch_worker, '_stop', False):
             from core.yield_handoff import remember
             context['source_history']={item.strip_id.upper():{'source_mtime':item.source_mtime,'sources':item.sources} for item in strips}
