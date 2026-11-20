@@ -420,7 +420,14 @@ class YieldTab(QWidget):
         ski_text = self.ski_in.text().strip()
         ski_path = Path(ski_text) if ski_text else None
         process_mode = bool(vrs_paths or fvi_paths or ivs_paths)
-        selected_paths = vrs_paths + fvi_paths + ivs_paths if process_mode else txt_paths
+        filters = self.get_process_filters()
+        selected_paths = txt_paths
+        if process_mode:
+            selected_paths = [path for process, paths in (('VRS', vrs_paths), ('FVI', fvi_paths), ('IVS', ivs_paths))
+                              if process in filters for path in paths]
+            if not selected_paths:
+                QMessageBox.warning(self, _("입력 오류"), _("TXT가 지정된 VRS, FVI 또는 IVS 공정을 하나 이상 선택하세요."))
+                return
         if not selected_paths or any(not path.is_file() for path in selected_paths):
             QMessageBox.warning(self, _("입력 오류"), _("VRS/FVI/IVS TXT 또는 생성 TXT 파일을 하나 이상 선택하세요."))
             return
@@ -474,7 +481,7 @@ class YieldTab(QWidget):
                     xout_limit,
                     skipdata_path,
                     ski_path,
-                    self.get_process_filters(),
+                    filters,
                     ivs_dummy_scrap_strips,
                     txt_first=not ivs_json_paths,
                 )

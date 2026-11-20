@@ -81,6 +81,40 @@ class GuiTests(unittest.TestCase):
         from openpyxl import load_workbook
         self.assertTrue(load_workbook(target).sheetnames)
 
+    def test_yield_calculates_fvi_only_and_ignores_disabled_vrs_input(self):
+        txt, ids = self.fixture()
+        ski = self.root / 'final.ski'
+        ski.write_text('RX1234-01,1,1\n')
+        vrs = self.root / 'missing-vrs.txt'
+        vrs.with_suffix('.txt.its.json').write_text('{bad export receipt')
+        tab = self.tab(6)
+        for name in ('txt_in', 'ivs_txt_in', 'ivs_json_in', 'skipdata_in'):
+            getattr(tab, name).clear()
+        tab.vrs_txt_in.setText(str(vrs))
+        tab.fvi_txt_in.setText(str(txt))
+        tab.strip_json_in.setText(str(ids))
+        tab.ski_in.setText(str(ski))
+        tab.units_per_strip_in.setText('4')
+        tab.xout_limit_in.setText('3')
+        tab.chk_excel_vrs.setChecked(False)
+        tab.chk_excel_ivs.setChecked(False)
+        tab.chk_excel_fvi.setChecked(True)
+        self.action(tab.btn_calc, 'click')
+        self.assertEqual(tab.summary['report_process_code_distribution'], {'FVI:SM03':1})
+        self.assertEqual((tab.summary['vrs_strip_count'], tab.summary['fvi_strip_count']), (0, 1))
+        self.assertNotIn(str(vrs), tab.summary['report_trace']['file_versions'])
+        self.assertFalse(tab.summary['collection_validation']['enabled'])
+        # A coordinate count discrepancy must also work with the VRS key absent.
+        txt.write_text(txt.read_text().replace('RX1234-,RX1234-01,EOS',
+                                              'RX1234-,RX1234-01,2,1,T,OT07\nRX1234-,RX1234-01,EOS'))
+        with patch.dict(os.environ, {'DMT_CACHE_DIR':str(self.root / 'cache')}):
+            self.action(tab.btn_calc, 'click')
+        self.assertEqual(set(tab.summary['ski_gather_xout_mismatch_rows'][0]['processes']), {'FVI'})
+        self.assertFalse(any(item.get('title') == '계산 실패' for _, item in self.dialogs))
+        tab.chk_excel_fvi.setChecked(False)
+        self.action(tab.btn_calc, 'click')
+        self.assertIn('TXT가 지정된', self.dialogs[-1][1]['text'])
+
     def test_9999_has_no_unresolved_popup_and_can_export_excel(self):
         from openpyxl import load_workbook
         txt,ids=self.fixture();txt.write_text(txt.read_text().replace('SM03','9999'))

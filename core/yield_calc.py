@@ -869,6 +869,9 @@ def _calculate_yield_summary_by_process(
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     ivs_dummy_scrap_strips = ivs_dummy_scrap_strips or set()
     process_inputs = {"VRS": vrs_paths, "FVI": fvi_paths, "IVS": ivs_paths or []}
+    if filters:
+        process_inputs = {process: paths for process, paths in process_inputs.items() if process in filters}
+    active_txt_paths = [path for paths in process_inputs.values() for path in paths]
     from core.report_trace import ReportTrace, file_version
     report_trace = ReportTrace(process_inputs, ivs_json_paths or [], skipdata_path, ski_path)
     bbt_sources = {}
@@ -876,14 +879,14 @@ def _calculate_yield_summary_by_process(
     bbt_code_map = load_skipdata_code_folder(skipdata_path)
     ivs_origins = {}
     from core.whole_strip_review import WholeStripReview
-    watched_paths=list(vrs_paths)+list(fvi_paths)+list(ivs_paths or [])+list(ivs_json_paths or [])+([ski_path] if ski_path else [])
+    watched_paths=active_txt_paths+list(ivs_json_paths or [])+([ski_path] if ski_path else [])
     input_versions={str(p):file_version(p) for p in watched_paths}
     scrap_review = WholeStripReview(ski_path, input_versions.get(str(ski_path)))
     ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     ivs_records_by_strip = load_ivs_records_by_strip(ivs_json_paths or [], json_lot_id, ivs_origins, include_history=True)
     from core.its_validation import load_history,validate_strip,source_metadata
     from core.collection import reports_for_inputs
-    collection_validation=reports_for_inputs(list(vrs_paths)+list(fvi_paths)+list(ivs_paths or []),{'VRS':vrs_paths,'FVI':fvi_paths,'IVS':ivs_paths or []})
+    collection_validation=reports_for_inputs(active_txt_paths, process_inputs)
     its_history=load_history(ivs_json_paths or [])
     scopes=[r.get('rework_scope',{}) for r in collection_validation.get('reports',[])]
     rework_scope=next((s for s in scopes if s.get('enabled')), {})
@@ -911,8 +914,6 @@ def _calculate_yield_summary_by_process(
     process_replaced: dict[str, int] = {}
     process_selected_sources = {}
     for process, paths in process_inputs.items():
-        if filters and process not in filters:
-            continue
         selected = {}
         blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected, its_history,
             ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0,rework_scope,txt_first) if paths else ({}, 0)
@@ -1299,8 +1300,8 @@ def _calculate_yield_summary_by_process(
                     "added_count": len(added_coords),
                     "ivs_dummy_9999_scrap": is_ivs_dummy_scrap,
                     "processes": {
-                        process: summarize_gather_block_by_process(process, process_blocks[process].get(strip_id))
-                        for process in process_priority
+                        process: summarize_gather_block_by_process(process, blocks.get(strip_id))
+                        for process, blocks in process_blocks.items()
                     },
                 }
             )
@@ -1437,18 +1438,18 @@ def _calculate_yield_summary_by_process(
         "process_replaced_counts": process_replaced,
         "only_by_process": only_by_process,
         "missing_by_process": missing_by_process,
-        "vrs_strip_count": len(process_blocks["VRS"]),
-        "fvi_strip_count": len(process_blocks["FVI"]),
-        "ivs_strip_count": len(process_blocks["IVS"]),
-        "vrs_replaced_count": process_replaced["VRS"],
-        "fvi_replaced_count": process_replaced["FVI"],
-        "ivs_replaced_count": process_replaced["IVS"],
-        "vrs_only": only_by_process["VRS"],
-        "fvi_only": only_by_process["FVI"],
-        "ivs_only": only_by_process["IVS"],
-        "missing_vrs": missing_by_process["VRS"],
-        "missing_fvi": missing_by_process["FVI"],
-        "missing_ivs": missing_by_process["IVS"],
+        "vrs_strip_count": len(process_blocks.get("VRS", {})),
+        "fvi_strip_count": len(process_blocks.get("FVI", {})),
+        "ivs_strip_count": len(process_blocks.get("IVS", {})),
+        "vrs_replaced_count": process_replaced.get("VRS", 0),
+        "fvi_replaced_count": process_replaced.get("FVI", 0),
+        "ivs_replaced_count": process_replaced.get("IVS", 0),
+        "vrs_only": only_by_process.get("VRS", []),
+        "fvi_only": only_by_process.get("FVI", []),
+        "ivs_only": only_by_process.get("IVS", []),
+        "missing_vrs": missing_by_process.get("VRS", []),
+        "missing_fvi": missing_by_process.get("FVI", []),
+        "missing_ivs": missing_by_process.get("IVS", []),
         "strip_json_validation": validation,
         "xout_distribution": dict(sorted(xout_distribution.items())),
         "code_distribution": code_distribution,
