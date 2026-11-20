@@ -520,13 +520,14 @@ def _is_full_txt_grid(coords: set[tuple[int, int]], units_per_strip: int) -> boo
     return width * height == units_per_strip and all(x >= 1 and y >= 1 for x, y in coords)
 
 
-def _its_gathering_difference(strip_id, txt_coords, ski_coords, bbt_coords, sources):
+def _ski_txt_difference(strip_id, txt_coords, ski_coords, bbt_coords, sources):
     txt_only = txt_coords - ski_coords - bbt_coords
-    if not txt_only:
+    ski_only = ski_coords - txt_coords - bbt_coords
+    if not (txt_only or ski_only):
         return None
     return {
         'strip_id': strip_id, 'txt_only': sorted(txt_only),
-        'ski_only': sorted(ski_coords - txt_coords - bbt_coords),
+        'ski_only': sorted(ski_only),
         'sources': sources,
     }
 
@@ -628,6 +629,7 @@ def _calculate_yield_summary_many(
     gather_coords_by_strip: dict[str, set[tuple[int, int]]] = {}
     per_strip_rows: list[dict] = []
     its_gathering_differences = []
+    ski_txt_differences = []
 
     for strip_id in sorted(expected_strip_ids):
         block = blocks.get(strip_id)
@@ -647,10 +649,12 @@ def _calculate_yield_summary_many(
         block_coords = gather_line_coords(block.defect_lines) if block else set()
         bbt_coords = set(skipdata.get(strip_id, set()))
         ski_coords = set(ski_map.get(strip_id, set()))
-        difference = _its_gathering_difference(strip_id, block_coords, ski_coords, bbt_coords,
-                                               {'VRS': sorted(block.source_files)} if block else {}) if ski_path else None
+        difference = _ski_txt_difference(strip_id, block_coords, ski_coords, bbt_coords,
+                                        {'VRS': sorted(block.source_files)} if block else {}) if ski_path else None
         if difference:
-            its_gathering_differences.append(difference)
+            ski_txt_differences.append(difference)
+            if difference['txt_only']:
+                its_gathering_differences.append(difference)
         gather_coords_by_strip[strip_id] = block_coords
         if bbt_xout_count:
             bbt_strip_count += 1
@@ -696,7 +700,7 @@ def _calculate_yield_summary_many(
             {
                 "strip_id": strip_id,
                 "whole_strip_awaiting_ski": strip_id in awaiting_ski_strips,
-                "its_txt_extra": bool(difference),
+                "its_txt_extra": bool(difference and difference['txt_only']),
                 "xout_count": effective_xout_count,
                 "ski_xout_count": ski_defects,
                 "ski_status": "허용수초과 스트립" if ski_defects == units_per_strip else "검증",
@@ -750,6 +754,7 @@ def _calculate_yield_summary_many(
         "report_trace":legacy_trace.snapshot(),
         "whole_strip_review": scrap_review.rows,
         "its_gathering_differences": its_gathering_differences,
+        "ski_txt_differences": ski_txt_differences,
         "whole_strip_unverified": sorted(archived_txt_strips - eligible_txt_strips),
         "txt_only_strips": txt_only_strips,
         "missing_strips": missing_strips,
@@ -913,11 +918,15 @@ def _calculate_yield_summary_by_process(
     process_blocks: dict[str, dict[str, GatherStrip]] = {}
     process_replaced: dict[str, int] = {}
     process_selected_sources = {}
+    process_selected_origins = {}
     for process, paths in process_inputs.items():
         selected = {}
+        origins = {}
         blocks, replaced = load_latest_process_blocks(paths, json_lot_id, bbt_map, ski_map, selected, its_history,
-            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0,rework_scope,txt_first) if paths else ({}, 0)
+            ski_path.stat().st_mtime if ski_path and ski_path.is_file() else 0,rework_scope,txt_first,
+            selected_origins=origins) if paths else ({}, 0)
         process_selected_sources[process] = selected
+        process_selected_origins[process] = origins
         process_blocks[process] = blocks
         process_replaced[process] = replaced
     gather_strip_ids = set().union(*(set(blocks) for blocks in process_blocks.values()))
@@ -981,6 +990,7 @@ def _calculate_yield_summary_by_process(
     archived_by_process: dict[str, set[str]] = defaultdict(set)
     unverified_scrap_strips: list[str] = []
     its_gathering_differences = []
+    ski_txt_differences = []
 
     for strip_id in sorted(expected_strip_ids):
         bbt_coords = set(bbt_map.get(strip_id, set()))
@@ -1030,14 +1040,16 @@ def _calculate_yield_summary_by_process(
                                        if code != '9998' or not (txt_first or strip_id in its_history)))
                 for process, codes in txt_codes.items()
             }
-            extra = set().union(*active_txt_coords.values())
-            difference = _its_gathering_difference(
-                strip_id, extra, ski_coords_for_strip, bbt_coords,
+            active_txt = set().union(*active_txt_coords.values())
+            difference = _ski_txt_difference(
+                strip_id, active_txt, ski_coords_for_strip, bbt_coords,
                 {process: [process_selected_sources[process][strip_id]]
                  for process, coords in active_txt_coords.items() if coords - ski_coords_for_strip - bbt_coords},
             )
             if difference:
-                its_gathering_differences.append(difference)
+                ski_txt_differences.append(difference)
+                if difference['txt_only']:
+                    its_gathering_differences.append(difference)
 
         by_process_code: dict[str, dict[str, set[tuple[int, int]]]] = {}
         merged_by_code: dict[str, set[tuple[int, int]]] = defaultdict(set)
@@ -1180,7 +1192,8 @@ def _calculate_yield_summary_by_process(
             report_trace.strips[strip_id] = {'x_count':x_count_for_strip,'units_per_strip':units_per_strip,'is_scrap':is_scrap,
                 'ski_coords':[list(c) for c in sorted(ski_coords_for_strip)],'bbt_coords':[list(c) for c in sorted(bbt_coords)],
                 'processes':{p:{**summarize_gather_block_by_process(p,blocks.get(strip_id)),
-                               'selected_source':process_selected_sources.get(p,{}).get(strip_id,'')}
+                               'selected_source':process_selected_sources.get(p,{}).get(strip_id,''),
+                               'selected_origins':process_selected_origins[p].get(strip_id, [])}
                              for p,blocks in process_blocks.items()},
                 'ivs_records':[list(ref) for ref in refs]}
         report_remaining = set(report_target_coords)
@@ -1310,7 +1323,7 @@ def _calculate_yield_summary_by_process(
                 "strip_id": strip_id,
                 "final_xout": effective_final_xout,
                 "whole_strip_awaiting_ski": awaiting_ski,
-                "its_txt_extra": bool(difference),
+                "its_txt_extra": bool(difference and difference['txt_only']),
                 "ski_xout_count": ski_defects,
                 "ski_status": "허용수초과 스트립" if ski_defects == units_per_strip else "검증",
                 "bbt_count": len(bbt_coords),
@@ -1384,6 +1397,7 @@ def _calculate_yield_summary_by_process(
         "mode": "process",
         "whole_strip_review": scrap_review.rows,
         "its_gathering_differences": its_gathering_differences,
+        "ski_txt_differences": ski_txt_differences,
         "whole_strip_unverified": unverified_scrap_strips,
         "txt_first": txt_first,
         "xml_followup_evidence": followup_evidence,

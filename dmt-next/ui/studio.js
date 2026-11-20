@@ -97,9 +97,17 @@ function renderYieldGuide(root){
 }
 
 document.addEventListener('keydown',event=>{
- if(event.defaultPrevented||event.repeat||event.isComposing||event.ctrlKey||event.altKey||event.metaKey||snapshot?.root.index!==0||dialogRequest||[...document.querySelectorAll('.overlay')].some(o=>o!==imageViewer?.overlay))return;
+ if(event.defaultPrevented||event.repeat||event.isComposing||event.ctrlKey||event.altKey||event.metaKey||dialogRequest)return;
  if(event.target.closest?.('input,textarea,select,[contenteditable="true"]'))return;
  const key=event.key.toLowerCase();if(key!=='a'&&key!=='d')return;
+ const overlays=[...document.querySelectorAll('.overlay')];
+ const comparison=overlays.at(-1)?.querySelector('.its-coordinate-compare');
+ if(comparison){
+  event.preventDefault();
+  comparison.querySelector(key==='a'?'.its-compare-previous':'.its-compare-next')?.click();
+  return;
+ }
+ if(snapshot?.root.index!==0||overlays.some(o=>o!==imageViewer?.overlay))return;
  event.preventDefault();window.studio.stepImage(key==='a'?-1:1).catch(error);
 });
 

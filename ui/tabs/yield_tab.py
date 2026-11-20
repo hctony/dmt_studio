@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import DEFAULT_MODEL
-from core.gather import format_xy_coords, load_latest_process_blocks, parse_gather_file
+from core.gather import load_latest_process_blocks, parse_gather_file
 from core.ivs import load_ivs_dummy_scrap_strips
 from core.skipdata import load_skipdata_folder
 from core.utils import split_path_list, to_json_plain
@@ -58,6 +58,7 @@ class YieldTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.summary: dict = {}
+        self.its_coordinate_rows: dict[str, dict] = {}
         self.txt_paths: list[Path] = []
         self._build_ui()
 
@@ -272,6 +273,7 @@ class YieldTab(QWidget):
         self.xout_table.setHorizontalHeaderLabels([_("X-out 수"), _("Strip 수")])
         splitter.addWidget(self.xout_table)
         self.strip_table = QTableWidget(0, 8)
+        self.strip_table.cellClicked.connect(self.open_strip_coordinate_review)
         self.strip_table.setHorizontalHeaderLabels(
             ["StripID", _("합산 X-out"), _("BBT 불량"), _("추가 불량"), _("게더링 원본"), _("BBT 중복"), _("판정"), _("TXT 블록 수")]
         )
@@ -837,7 +839,12 @@ class YieldTab(QWidget):
     def refresh_result(self) -> None:
         summary = self.summary
         differences = summary.get('its_gathering_differences', [])
-        self.btn_its_coordinates.setEnabled(bool(differences))
+        from core.report_review import mismatch_rows
+        coordinate_rows = {row['strip_id']: row for row in summary.get('ski_txt_differences', differences)}
+        compare_ids = set(coordinate_rows) | {row['strip_id'] for row in mismatch_rows(summary)}
+        compare_ids.update(row['strip_id'] for row in summary.get('whole_strip_review', []))
+        self.its_coordinate_rows = {strip: coordinate_rows.get(strip, {'strip_id': strip}) for strip in sorted(compare_ids)}
+        self.btn_its_coordinates.setEnabled(bool(self.its_coordinate_rows))
         if summary.get("mode") == "process":
             self.refresh_process_result(summary)
             self.result.append('\n'+_('OT14 제외: 총 Unit과 불량 Unit에서 차감, 원본 좌표 검증은 유지')+f"\nOT14: {summary.get('ot14_excluded_units',0)} / "+_('원본 총 Unit')+f": {summary.get('gross_total_units',0)}")
@@ -945,20 +952,21 @@ class YieldTab(QWidget):
             f"{row['strip_id']} · {row['process']} · TXT {row['txt_count']} / SKI {row['ski_count']} · "
             f"{labels[row['status']]}\n{row['source']}" for row in rows))
 
+    def open_strip_coordinate_review(self, row, _column):
+        selected = self.strip_table.item(row, 0)
+        if selected and selected.text() in self.its_coordinate_rows:
+            self.show_its_coordinates()
+
     def show_its_coordinates(self):
-        rows = self.summary.get('its_gathering_differences', [])
-        if not rows:
+        if not self.its_coordinate_rows or not self.report_ready():
             return
+        from ui.its_coordinate_compare import ItsCoordinateCompare
         selected = self.strip_table.item(self.strip_table.currentRow(), 0)
         strip_id = selected.text() if selected else ''
-        row = next((item for item in rows if item['strip_id'] == strip_id), rows[0])
-        lines = [f"LOT: {self.summary['lot_id']}   StripID: {row['strip_id']}"]
-        for label, key in [('TXT에만 있는 좌표', 'txt_only'), ('SKI에만 있는 좌표', 'ski_only')]:
-            coords = format_xy_coords({tuple(coord) for coord in row[key]})
-            lines.extend(['', _(label) + f" ({len(coords)})", ', '.join(coords) or '-'])
-        lines.extend(['', _('원본 파일'), 'SKI: ' + self.summary['report_trace']['ski_path']])
-        lines.extend(f"{process}: {path}" for process, paths in row['sources'].items() for path in paths)
-        QMessageBox.information(self, _('불일치 좌표 확인'), '\n'.join(lines))
+        dialog = ItsCoordinateCompare(self.summary, list(self.its_coordinate_rows.values()), strip_id, self)
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        self.its_coordinates_dialog = dialog
+        dialog.show()
 
     def filtered_strip_rows(self, rows: list[dict], xout_key: str) -> list[dict]:
         if not hasattr(self, "radio_table_mismatch") or not self.radio_table_mismatch.isChecked():
@@ -967,7 +975,8 @@ class YieldTab(QWidget):
         return mismatch_rows({'mode':'process' if xout_key=='final_xout' else 'legacy','per_strip_rows':rows})
 
     def mark_table_row_if_mismatch(self, row: int, xout: int, ski: int, column_count: int) -> None:
-        if xout == ski:
+        strip = self.strip_table.item(row, 0)
+        if xout == ski and (not strip or strip.text() not in self.its_coordinate_rows):
             return
         color = QColor(210, 170, 0)
         for column in range(column_count):

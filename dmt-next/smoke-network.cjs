@@ -139,6 +139,44 @@ app.whenReady().then(async()=>{try{
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.modal pre')).some(p=>p.textContent.includes('rpt_occurrences'))"));
  await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.modal')).find(m=>m.querySelector('h2')?.textContent==='OT14_audit.csv').querySelector('.modal-head button').click()");
  assert.equal(await browser.webContents.executeJavaScript("localStorage.getItem('dmt-access-key')!==null"),true);
+ // Compare unmatched process TXT against SKI and navigate in the actual browser.
+ const compareTxt=path.join(sources,'compare.txt'), compareSki=path.join(sources,'compare.ski');
+ fs.writeFileSync(compareTxt,'1,TEST-,TEST-01\nTEST-,TEST-01,1,1,T,SM03\nTEST-,TEST-01,EOS\n2,TEST-,TEST-02\nTEST-,TEST-02,3,1,T,OT07\nTEST-,TEST-02,EOS\n');
+ fs.writeFileSync(compareSki,'TEST-01,2,1\nTEST-02,1,1\n');
+ const yieldState=walk((await rpc(0,'gui.snapshot')).root);
+ const fields=yieldState.filter(widget=>widget.type==='input');
+ for(const [index,value] of [[1,compareTxt],[4,''],[6,''],[8,compareSki]]){
+  await rpc(0,'gui.action',{id:fields[index].id,action:'input',value});
+ }
+ const compareBrowser=code=>browser.webContents.executeJavaScript(code);
+ await compareBrowser("dialogRequest=null;renderDialogs()");
+ let calculationDone=false;
+ const recalculation=rpc(0,'gui.action',{id:yieldState.find(w=>w.type==='button'&&w.text==='수율 계산').id,action:'click'})
+  .finally(()=>{calculationDone=true;});
+ for(let attempt=0;attempt<150&&!calculationDone;attempt++){
+  await compareBrowser("if(dialogRequest?.kind==='message')document.querySelector('#modals .modal-actions button')?.click()");
+  await delay(40);
+ }
+ assert(calculationDone,'Comparison calculation did not finish');
+ await recalculation;
+ await compareBrowser("(async()=>{snapshot=await window.studio.snapshot();paint(true);})()");
+ assert(await compareBrowser("(()=>{const cell=Array.from(document.querySelectorAll('#content td')).find(c=>c.textContent==='TEST-01');if(!cell)return false;cell.click();return true;})()"));
+ async function compareVisible(line){
+  for(let attempt=0;attempt<100;attempt++){
+   if(await compareBrowser(`document.querySelector('.its-coordinate-compare')?.textContent.includes(${JSON.stringify(line)})`))return;
+   await delay(40);
+  }
+  throw new Error('Coordinate comparison did not display '+line);
+ }
+ await compareVisible('TEST-,TEST-01,1,1,T,SM03');
+ await compareVisible('僅存在於 SKI 的座標');
+ await compareBrowser("document.dispatchEvent(new KeyboardEvent('keydown',{key:'d',bubbles:true}))");
+ await compareVisible('TEST-,TEST-02,3,1,T,OT07');
+ await compareBrowser("document.dispatchEvent(new KeyboardEvent('keydown',{key:'A',bubbles:true}))");
+ await compareVisible('TEST-,TEST-01,1,1,T,SM03');
+ await compareBrowser("document.querySelector('.its-compare-next').click()");
+ await compareVisible('TEST-,TEST-02,3,1,T,OT07');
+ await compareBrowser("document.querySelector('.its-coordinate-compare').closest('.modal').querySelector('.modal-head button').click()");
  // An already open B browser should recover after A restarts with the same
  // port and key. A reload clears stale widget IDs and old dialog events.
  let navigationCount=0;

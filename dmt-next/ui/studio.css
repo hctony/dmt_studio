@@ -15,6 +15,11 @@
 
 aside{overflow-y:auto}nav,footer{flex-shrink:0}
 .modal:has(.report-code-preview){width:min(1560px,96vw)}
+.modal:has(.its-coordinate-compare){width:min(1440px,96vw)}
+.its-coordinate-compare>.row:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}
+.its-coordinate-compare .group{margin-bottom:0;padding:14px}
+.its-coordinate-compare .text{height:clamp(220px,53vh,600px);max-height:none;overflow-wrap:anywhere}
+@media(max-width:760px){.its-coordinate-compare>.row:last-child{grid-template-columns:minmax(0,1fr)}}
 .report-code-preview .report-code-tables{display:grid;grid-template-columns:minmax(220px,28%) minmax(0,1fr);align-items:stretch}
 .report-code-tables .table-wrap{max-height:250px}.report-code-tables .group{margin:0;padding:12px}
 .report-code-preview>.text{min-height:170px;max-height:220px;background:#edf3fa}

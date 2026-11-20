@@ -163,14 +163,25 @@ class GuiTests(unittest.TestCase):
                 self.assertEqual(evidence.read('TXT/' + row['backup']), txt.read_bytes())
 
     def test_its_coordinate_alert_appears_once_and_coordinates_remain_available(self):
+        from core.collection import write_export
         txt, ids = self.fixture()
+        body = txt.read_text() + (
+            '2,RX1234-,RX1234-02\nRX1234-,RX1234-02,4,1,T,OT07\nRX1234-,RX1234-02,EOS\n'
+            '3,RX1234-,RX1234-03\nRX1234-,RX1234-03,1,1,T,DR01\nRX1234-,RX1234-03,EOS\n'
+        )
+        original = str(self.root/'machine-source.txt')
+        write_export(txt, body, {'RX1234-01': {'source_mtime':txt.stat().st_mtime, 'sources':[original]}})
         ski = self.root / 'final.ski'
-        ski.write_text('RX1234-01,2,1\n')
+        ski.write_text('RX1234-01,2,1\nRX1234-01,3,1\nRX1234-02,1,1\nRX1234-03,1,1\n')
+        skip = self.root / 'skipdata'
+        skip.mkdir()
+        (skip/'RX1234-01.rpt').write_text('X:003 Y:001 = 1 - OT14\n')
         tab = self.tab(6)
-        for field in ('fvi_txt_in', 'ivs_txt_in', 'ivs_json_in', 'txt_in', 'skipdata_in'):
+        for field in ('fvi_txt_in', 'ivs_txt_in', 'ivs_json_in', 'txt_in'):
             getattr(tab, field).clear()
         tab.vrs_txt_in.setText(str(txt))
         tab.ski_in.setText(str(ski))
+        tab.skipdata_in.setText(str(skip))
         tab.strip_json_in.setText(str(ids))
         tab.units_per_strip_in.setText('4')
         tab.xout_limit_in.setText('3')
@@ -181,11 +192,23 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         tab.radio_table_mismatch.setChecked(True)
         self.assertEqual(tab.strip_table.item(0,0).text(), 'RX1234-01')
-        self.action(tab.btn_its_coordinates, 'click')
-        detail = self.dialogs[-1][1]['text']
-        self.assertIn('X:001 Y:001', detail)
-        self.assertIn('X:002 Y:001', detail)
-        self.assertIn(str(txt), detail)
+        self.action(tab.strip_table, 'table', row=0, column=0)
+        dialog = tab.its_coordinates_dialog
+        self.assertTrue(any(item['title']=='불일치 좌표 확인' for item in self.c.snapshot()['dialogs']))
+        self.assertIn('1/2', dialog.position.text())
+        self.assertIn('X:002 Y:001', dialog.ski_view.toPlainText())
+        self.assertIn('X:003 Y:001', dialog.ski_view.toPlainText())
+        self.assertIn('RX1234-,RX1234-01,1,1,T,SM03', dialog.txt_view.toPlainText())
+        self.assertIn(str(txt), dialog.txt_view.toPlainText())
+        self.assertIn(original, dialog.txt_view.toPlainText())
+        self.assertFalse(dialog.previous.isEnabled())
+        self.action(dialog.next, 'click')
+        self.assertIn('2/2', dialog.position.text())
+        self.assertIn('RX1234-,RX1234-02,4,1,T,OT07', dialog.txt_view.toPlainText())
+        self.assertFalse(dialog.next.isEnabled())
+        self.action(dialog.previous, 'click')
+        self.assertIn('RX1234-01', dialog.position.text())
+        self.action(dialog, 'reject')
 
     def test_ivs_json_loading_and_list_checkbox(self):
         from core.models import DefectRecord

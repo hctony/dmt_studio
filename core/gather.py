@@ -396,6 +396,8 @@ def load_latest_process_blocks(
     ski_time: float = 0,
     rework_scope: dict | None = None,
     txt_first: bool = False,
+    *,
+    selected_origins: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, GatherStrip], int]:
     merged: dict[str, GatherStrip] = {}
     replaced_count = 0
@@ -409,6 +411,7 @@ def load_latest_process_blocks(
             from core.rework_scope import cutoff, txt_timestamp
             if rework_scope and rework_scope.get('reuse_xml'):epoch=None
             metadata=clocks.get(strip_id.upper()) if clocks is not None else None
+            origins = metadata.get('sources', []) if metadata and selected_origins is not None else []
             if metadata:candidate.source_mtime=metadata['source_mtime']
             elif clocks is None:candidate.source_mtime=txt_timestamp(txt_path,candidate.lot,candidate.source_mtime)[0]
             elif epoch or cutoff(rework_scope or {}):continue
@@ -418,6 +421,7 @@ def load_latest_process_blocks(
                 if not metadata or metadata.get('source_mtime',0)<epoch['epoch_start']:continue
                 candidate.source_mtime=metadata['source_mtime']
             target = merged.get(strip_id.upper())
+            input_candidate = candidate
             if target is not None and epoch and not (rework_scope or {}).get('enabled'):
                 from core.its_validation import epoch_candidate
                 candidate=epoch_candidate(target,candidate,(bbt_map or {}).get(strip_id,set()),(ski_map or {}).get(strip_id,set()),ski_time)
@@ -425,12 +429,22 @@ def load_latest_process_blocks(
                 merged[strip_id.upper()] = candidate
                 if selected_sources is not None:
                     selected_sources[strip_id.upper()] = str(txt_path)
+                if selected_origins is not None and origins:
+                    selected_origins[strip_id.upper()] = list(origins)
             elif (candidate.source_mtime>=target.source_mtime if txt_first or epoch or (rework_scope or {}).get('enabled') else should_replace_gather_strip_smart(target, candidate, bbt_map, ski_map)):
                 candidate.sources = unique_lines(target.sources + candidate.sources)
                 candidate.replaced_count += target.replaced_count + 1
                 merged[strip_id.upper()] = candidate
                 if selected_sources is not None and candidate is not target:
                     selected_sources[strip_id.upper()] = str(txt_path)
+                if selected_origins is not None and candidate is not target:
+                    key = strip_id.upper()
+                    if candidate is not input_candidate:
+                        origins = unique_lines(selected_origins.get(key, []) + list(origins))
+                    if origins:
+                        selected_origins[key] = list(origins)
+                    else:
+                        selected_origins.pop(key, None)
                 replaced_count += 1
             else:
                 target.replaced_count += candidate.replaced_count + 1
