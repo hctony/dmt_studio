@@ -103,10 +103,11 @@ class ReportPreviewDialog(QDialog):
 
     def classify_rows(self,all_code):
         from core.report_review import classify,REVIEWABLE
-        if self.code.upper() not in REVIEWABLE:
-            QMessageBox.warning(self,_('분류 오류'),_('9999 또는 UNKNOWN 코드를 선택하세요.'));return
         rows=trace_rows(self.trace,self.code,0,sum(n for c,n in self.codes if c==self.code))[0] if all_code else [self.rows[i.row()] for i in self.unit_table.selectionModel().selectedRows()]
-        if all_code and QMessageBox.question(self,_('전체 분류 확인'),_('현재 코드의 모든 좌표를 같은 코드로 분류합니까?')+f'\n{self.code}: {len(rows)} → {self.review_code.text()}',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
+        rows = [row for row in rows if row['code'].upper() in REVIEWABLE or row['reason'] == 'ski_unknown_ot06']
+        if not rows:
+            QMessageBox.warning(self, _('분류 오류'), _('9999, UNKNOWN 또는 자동 치환된 OT06 좌표를 선택하세요.'));return
+        if all_code and QMessageBox.question(self,_('전체 분류 확인'),_('선택한 좌표를 같은 코드로 분류합니까?')+f'\n{self.code}: {len(rows)} → {self.review_code.text()}',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
         try:classify(self.summary,rows,self.review_code.text(),self.review_note.text())
         except (ValueError,OSError) as error:QMessageBox.warning(self,_('분류 오류'),_(str(error)));return
         self.refresh_classifications()
@@ -129,9 +130,10 @@ class ReportPreviewDialog(QDialog):
         code,count=self.codes[row]
         if code==self.code:return
         self.code=code;self.offset=0
-        pending=code.upper() in ('9999','UNKNOWN')
+        groups = list(matching_groups(self.trace, code))
+        pending = code.upper() in ('9999', 'UNKNOWN') or any(group['reason'] == 'ski_unknown_ot06' for group in groups)
         self.classify_selected.setEnabled(pending);self.classify_all.setEnabled(pending)
-        traced=sum(len(group['coords']) for group in matching_groups(self.trace,code))
+        traced=sum(len(group['coords']) for group in groups)
         if traced!=count:
             self.notice.setText(_('성적서 수량과 좌표 추적 수량이 다릅니다. 집계 규칙을 확인하세요.')+f' {code}: {count} / {traced}')
         else:self.notice.setText((_('OT14는 수율·불량 열에서 제외하며 엑셀 검증 셀에만 기록합니다.') if code=='OT14' else _('엑셀 수량과 좌표 추적 수량 일치'))+f': {code} / {count}')

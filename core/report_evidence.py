@@ -60,11 +60,13 @@ def frozen_text(trace,row):
     info=trace.get('strips',{}).get(row['strip_id'],{})
     coord=[row['x'],row['y']]
     lines=[_('계산 시점의 배정 근거'),f"StripID: {row['strip_id']}",f"X: {row['x']:03d} / Y: {row['y']:03d}",
-        _('성적서 코드')+': '+excel_code(row['code']),_('집계 원본 코드')+': '+row['code'],
+        _('성적서 코드')+': '+excel_code(row['code']),_('집계 원본 코드')+': '+('UNKNOWN' if row['reason']=='ski_unknown_ot06' else row['code']),
         _('배정 공정')+': '+row['process'],_('계산 사유')+': '+_(REASONS.get(row['reason'],row['reason'])),
         _('계산에 사용한 X 폭')+': '+str(info.get('x_count',0)),
         f"SKI: {coord in info.get('ski_coords',[])} / BBT: {coord in info.get('bbt_coords',[])}",
         _('좌표 환산 Unit index (0 기준)')+': '+str((row['y']-1)*info.get('x_count',0)+row['x']-1)]
+    if row.get('original_reason'):
+        lines.append(_(REASONS.get(row['original_reason'], row['original_reason'])))
     for decision in trace.get('classifications',[]):
         if (decision['strip_id'],decision['x'],decision['y'])==(row['strip_id'],row['x'],row['y']):
             lines+=['',_('사용자 분류 이력')+f": {decision['from_code']} → {decision['to_code']}",_('분류 사유')+': '+decision['note'],decision['at']]

@@ -520,6 +520,17 @@ def _is_full_txt_grid(coords: set[tuple[int, int]], units_per_strip: int) -> boo
     return width * height == units_per_strip and all(x >= 1 and y >= 1 for x, y in coords)
 
 
+def _its_gathering_difference(strip_id, txt_coords, ski_coords, bbt_coords, sources):
+    txt_only = txt_coords - ski_coords - bbt_coords
+    if not txt_only:
+        return None
+    return {
+        'strip_id': strip_id, 'txt_only': sorted(txt_only),
+        'ski_only': sorted(ski_coords - txt_coords - bbt_coords),
+        'sources': sources,
+    }
+
+
 def _calculate_yield_summary_many(
     txt_paths: list[Path],
     strip_json_path: Path | None,
@@ -531,10 +542,10 @@ def _calculate_yield_summary_many(
 ) -> dict:
     dummy_codes=getattr(ivs_dummy_scrap_strips,'codes',{})
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
-    skipdata = load_skipdata_folder(skipdata_path)
     from core.report_trace import ReportTrace
     from core.whole_strip_review import WholeStripReview
     legacy_trace=ReportTrace({'VRS':txt_paths},[],skipdata_path,ski_path)
+    skipdata = load_skipdata_folder(skipdata_path)
     scrap_review = WholeStripReview(ski_path, legacy_trace.versions.get(str(ski_path)))
     ski_map = load_ski_file(ski_path) if ski_path and ski_path.is_file() else {}
     legacy_sources={};load_skipdata_folder(skipdata_path,legacy_sources);legacy_trace.set_bbt_sources(legacy_sources)
@@ -616,6 +627,7 @@ def _calculate_yield_summary_many(
     bbt_strip_count = 0
     gather_coords_by_strip: dict[str, set[tuple[int, int]]] = {}
     per_strip_rows: list[dict] = []
+    its_gathering_differences = []
 
     for strip_id in sorted(expected_strip_ids):
         block = blocks.get(strip_id)
@@ -633,6 +645,12 @@ def _calculate_yield_summary_many(
             xout_count = bbt_xout_count
             gather_xout_count = 0
         block_coords = gather_line_coords(block.defect_lines) if block else set()
+        bbt_coords = set(skipdata.get(strip_id, set()))
+        ski_coords = set(ski_map.get(strip_id, set()))
+        difference = _its_gathering_difference(strip_id, block_coords, ski_coords, bbt_coords,
+                                               {'VRS': sorted(block.source_files)} if block else {}) if ski_path else None
+        if difference:
+            its_gathering_differences.append(difference)
         gather_coords_by_strip[strip_id] = block_coords
         if bbt_xout_count:
             bbt_strip_count += 1
@@ -643,6 +661,8 @@ def _calculate_yield_summary_many(
         ski_defects = min(len(ski_map.get(strip_id, set())), units_per_strip) if ski_map else xout_count
         is_ivs_dummy_scrap = strip_id in ivs_dummy_scrap_strips
         effective_xout_count = units_per_strip if is_ivs_dummy_scrap else xout_count
+        if 0 < len(ski_coords) < units_per_strip and strip_id in eligible_txt_strips and (block_coords | bbt_coords).issubset(ski_coords):
+            effective_xout_count = max(effective_xout_count, len(ski_coords))
         xout_distribution[effective_xout_count] += 1
         is_ski_full_scrap_by_limit = bool(ski_map and ski_defects >= units_per_strip and effective_xout_count > xout_limit)
         is_scrap = effective_xout_count >= units_per_strip or is_ski_full_scrap_by_limit
@@ -653,13 +673,16 @@ def _calculate_yield_summary_many(
             good_strip_ids.append(strip_id)
             defective_units += min(units_per_strip,ski_defects+len(set(skipdata.get(strip_id,set()))-set(ski_map.get(strip_id,set())))) if ski_map else ski_defects
             good_strip_defective_units += ski_defects
-        bbt_coords=set(skipdata.get(strip_id,set()))
-        ski_coords=set(ski_map.get(strip_id,set()))
         width=infer_x_count_for_strip(units_per_strip,[bbt_coords,ski_coords,block_coords])
         targets=set(ski_coords) if ski_coords else block_coords|bbt_coords
         if is_scrap:targets=full_unit_coords(width,units_per_strip//width) if width else targets
         targets.update(bbt_coords)
-        codes={parse_xy_from_gather_line(line):parse_gather_code(line) for line in (block.defect_lines if block else [])}
+        codes = {}
+        for line in block.defect_lines if block else []:
+            coord = parse_xy_from_gather_line(line)
+            code = parse_gather_code(line)
+            if code != 'UNKNOWN' or coord not in ski_coords or coord not in codes:
+                codes[coord] = code
         legacy_trace.strips[strip_id]={'x_count':width,'units_per_strip':units_per_strip,'is_scrap':is_scrap,
             'ski_coords':[list(c) for c in sorted(ski_coords)],'bbt_coords':[list(c) for c in sorted(bbt_coords)],
             'processes':{'VRS':{'defect_lines':block.defect_lines + excluded_txt_lines.get(strip_id, []) if block else [],'sources':sorted(block.source_files) if block else []}},'ivs_records':[]}
@@ -673,6 +696,7 @@ def _calculate_yield_summary_many(
             {
                 "strip_id": strip_id,
                 "whole_strip_awaiting_ski": strip_id in awaiting_ski_strips,
+                "its_txt_extra": bool(difference),
                 "xout_count": effective_xout_count,
                 "ski_xout_count": ski_defects,
                 "ski_status": "허용수초과 스트립" if ski_defects == units_per_strip else "검증",
@@ -725,6 +749,7 @@ def _calculate_yield_summary_many(
         "clean_txt_strips": clean_txt_strips,
         "report_trace":legacy_trace.snapshot(),
         "whole_strip_review": scrap_review.rows,
+        "its_gathering_differences": its_gathering_differences,
         "whole_strip_unverified": sorted(archived_txt_strips - eligible_txt_strips),
         "txt_only_strips": txt_only_strips,
         "missing_strips": missing_strips,
@@ -843,11 +868,13 @@ def _calculate_yield_summary_by_process(
 ) -> dict:
     json_lot_id, strip_json_ids = maybe_load_strip_id_json(strip_json_path)
     ivs_dummy_scrap_strips = ivs_dummy_scrap_strips or set()
+    process_inputs = {"VRS": vrs_paths, "FVI": fvi_paths, "IVS": ivs_paths or []}
+    from core.report_trace import ReportTrace, file_version
+    report_trace = ReportTrace(process_inputs, ivs_json_paths or [], skipdata_path, ski_path)
     bbt_sources = {}
     bbt_map = load_skipdata_folder(skipdata_path, bbt_sources)
     bbt_code_map = load_skipdata_code_folder(skipdata_path)
     ivs_origins = {}
-    from core.report_trace import file_version
     from core.whole_strip_review import WholeStripReview
     watched_paths=list(vrs_paths)+list(fvi_paths)+list(ivs_paths or [])+list(ivs_json_paths or [])+([ski_path] if ski_path else [])
     input_versions={str(p):file_version(p) for p in watched_paths}
@@ -878,13 +905,6 @@ def _calculate_yield_summary_by_process(
     dummy_codes,dummy_alarms=evaluate(ivs_records_by_strip)
     ivs_dummy_scrap_strips=set(dummy_codes)
     process_priority = ["IVS", "VRS", "FVI"]
-    process_inputs = {
-        "VRS": vrs_paths,
-        "FVI": fvi_paths,
-        "IVS": ivs_paths or [],
-    }
-    from core.report_trace import ReportTrace
-    report_trace = ReportTrace(process_inputs, ivs_json_paths or [], skipdata_path, ski_path)
     report_trace.collection_validation=collection_validation
     report_trace.set_bbt_sources(bbt_sources)
     process_blocks: dict[str, dict[str, GatherStrip]] = {}
@@ -959,6 +979,7 @@ def _calculate_yield_summary_by_process(
     its_audits=[]
     archived_by_process: dict[str, set[str]] = defaultdict(set)
     unverified_scrap_strips: list[str] = []
+    its_gathering_differences = []
 
     for strip_id in sorted(expected_strip_ids):
         bbt_coords = set(bbt_map.get(strip_id, set()))
@@ -1000,6 +1021,22 @@ def _calculate_yield_summary_by_process(
                 }
         if present_processes and all(strip_id in archived_by_process[p] for p in present_processes):
             unverified_scrap_strips.append(strip_id)
+
+        difference = None
+        if ski_path:
+            active_txt_coords = {
+                process: set().union(*(coords for code, coords in codes.items()
+                                       if code != '9998' or not (txt_first or strip_id in its_history)))
+                for process, codes in txt_codes.items()
+            }
+            extra = set().union(*active_txt_coords.values())
+            difference = _its_gathering_difference(
+                strip_id, extra, ski_coords_for_strip, bbt_coords,
+                {process: [process_selected_sources[process][strip_id]]
+                 for process, coords in active_txt_coords.items() if coords - ski_coords_for_strip - bbt_coords},
+            )
+            if difference:
+                its_gathering_differences.append(difference)
 
         by_process_code: dict[str, dict[str, set[tuple[int, int]]]] = {}
         merged_by_code: dict[str, set[tuple[int, int]]] = defaultdict(set)
@@ -1066,6 +1103,12 @@ def _calculate_yield_summary_by_process(
             final_coords = bbt_coords | gather_coords
             process_coord_counts["IVS"] = len(full_coords)
 
+        if ski_coords_for_strip:
+            known_coords = set().union(*(coords for codes in by_process_code.values()
+                                         for code, coords in codes.items() if code != 'UNKNOWN'))
+            for codes in by_process_code.values():
+                if 'UNKNOWN' in codes:
+                    codes['UNKNOWN'] -= known_coords & ski_coords_for_strip
         assigned_by_process = assign_coords_by_process_priority(by_process_code, bbt_coords, process_priority)
         assigned_added_coords = set().union(
             *(set().union(*by_code.values()) for by_code in assigned_by_process.values() if by_code)
@@ -1266,6 +1309,7 @@ def _calculate_yield_summary_by_process(
                 "strip_id": strip_id,
                 "final_xout": effective_final_xout,
                 "whole_strip_awaiting_ski": awaiting_ski,
+                "its_txt_extra": bool(difference),
                 "ski_xout_count": ski_defects,
                 "ski_status": "허용수초과 스트립" if ski_defects == units_per_strip else "검증",
                 "bbt_count": len(bbt_coords),
@@ -1338,6 +1382,7 @@ def _calculate_yield_summary_by_process(
     return {
         "mode": "process",
         "whole_strip_review": scrap_review.rows,
+        "its_gathering_differences": its_gathering_differences,
         "whole_strip_unverified": unverified_scrap_strips,
         "txt_first": txt_first,
         "xml_followup_evidence": followup_evidence,
@@ -1507,7 +1552,11 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
         "mismatch_count": len(mismatch_rows(summary)),
         "unresolved_codes": unresolved_counts(summary),
         "classifications": summary.get('report_trace',{}).get('classifications',[]),
+        "automatic_ot06_groups": [group for group in summary.get('report_trace', {}).get('groups', [])
+                                  if group['reason'] == 'ski_unknown_ot06'],
         "source_versions": summary.get('report_trace',{}).get('file_versions',{}),
+        "source_trace": {key: value for key, value in summary.get('report_trace', {}).items()
+                         if key in {'bbt_folder', 'rpt_audit_versions'}},
         "policy_errors": summary.get('report_policy_errors',[]),
         "lot_id": summary.get("lot_id", ""),
         "total_units": total_units,

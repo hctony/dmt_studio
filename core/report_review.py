@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import os
 from datetime import datetime, timezone
 from config import DATA_DIR
 
@@ -14,17 +15,45 @@ REVIEWABLE=UNRESOLVED|{'9999'}
 def mismatch_rows(summary):
     key='final_xout' if summary.get('mode')=='process' else 'xout_count'
     return [row for row in summary.get('per_strip_rows',[])
-            if row.get('whole_strip_awaiting_ski') or int(row.get(key,0))!=int(row.get('ski_xout_count',0))]
+            if row.get('whole_strip_awaiting_ski') or row.get('its_txt_extra') or int(row.get(key,0))!=int(row.get('ski_xout_count',0))]
 
 def review_binding(summary):
     trace=summary.get('_original_report_trace',summary.get('report_trace',{}))
     body={'lot':summary.get('lot_id'),'units':summary.get('units_per_strip'),'groups':trace.get('groups',[]),'versions':trace.get('file_versions',{})}
     return hashlib.sha256(json.dumps(body,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
-def sources_changed(summary):
+def changed_paths(trace):
     from core.report_trace import file_version
+    from core.ot14_audit import manifest
+    changed = [path for path, version in trace.get('file_versions', {}).items() if file_version(path) != version]
+    if 'rpt_audit_versions' in trace:
+        previous = trace['rpt_audit_versions']
+        current = manifest(trace.get('bbt_folder', ''))
+        # New RPTs may contain headers for a selected Strip regardless of their filename.
+        changed.extend(current.keys() - previous.keys())
+    return sorted(set(changed))
+
+def sources_changed(summary):
     trace=summary.get('_original_report_trace',summary.get('report_trace',{}))
-    return [path for path,version in trace.get('file_versions',{}).items() if file_version(path)!=version]
+    return changed_paths(trace)
+
+def record_its_alert(summary, model):
+    """Notify once for a source snapshot, shared by desktop and A-PC sessions."""
+    if not summary.get('its_gathering_differences'):
+        return False
+    from core.collection import cache_root
+    trace = summary.get('_original_report_trace', summary.get('report_trace', {}))
+    sources = {os.path.normcase(os.path.abspath(path)): version for path, version in trace.get('file_versions', {}).items()}
+    body = [model.strip().upper(), summary['lot_id'], sources]
+    key = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    directory = cache_root().parent / 'its-gathering-alerts'
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        with (directory / key).open('x', encoding='utf-8'):
+            pass
+    except FileExistsError:
+        return False
+    return True
 
 def _path(summary):return DATA_DIR/'report-reviews'/(review_binding(summary)+'.json')
 
@@ -44,17 +73,23 @@ def prepare_summary(summary):
     original=summary.get('_original_report_trace')
     if original:
         trace=deepcopy(original);groups=defaultdict(set);all_coords=defaultdict(set);applied=[]
+        ski_coords = {strip: {tuple(coord) for coord in item.get('ski_coords', [])}
+                      for strip, item in original.get('strips', {}).items()}
         decisions={(d.get('strip_id'),d.get('x'),d.get('y'),d.get('from_code')):d for d in summary.get('report_classifications',[])}
         for group in original.get('groups',[]):
             for x,y in group['coords']:
                 all_coords[group['strip_id']].add((x,y))
                 d=decisions.get((group['strip_id'],x,y,group['code']))
-                code=group['code'];reason=group['reason']
+                code=group['code'];reason=group['reason'];original_reason=''
                 if d and code.upper() in REVIEWABLE and re.fullmatch(r'[A-Z]{2}[0-9]{2}',str(d.get('to_code',''))) and str(d.get('note','')).strip():
                     code=d['to_code'];reason='manual_review';applied.append(d)
-                groups[(group['strip_id'],code,group['process'],reason)].add((x,y))
+                elif code.upper() == 'UNKNOWN' and (x, y) in ski_coords.get(group['strip_id'], ()):
+                    original_reason = reason
+                    code, reason = 'OT06', 'ski_unknown_ot06'
+                groups[(group['strip_id'],code,group['process'],reason,original_reason)].add((x,y))
         trace['groups']=[{'strip_id':strip,'code':code,'process':process,'reason':reason,'coords':[list(c) for c in sorted(coords)]}
-            for (strip,code,process,reason),coords in sorted(groups.items())]
+            | ({'original_reason': original_reason} if original_reason else {})
+            for (strip,code,process,reason,original_reason),coords in sorted(groups.items())]
         trace['classifications']=applied;summary['report_trace']=trace
         codes=Counter();processes=Counter();excluded=set()
         for group in trace['groups']:
@@ -101,7 +136,7 @@ def classify(summary,rows,target,note):
     if sources_changed(summary):raise ValueError('계산 후 원본이 변경되었습니다. 수율을 다시 계산하세요.')
     original=summary.get('_original_report_trace',{})
     valid={(g['strip_id'],x,y,g['code']) for g in original.get('groups',[]) if g['code'].upper() in REVIEWABLE for x,y in g['coords']}
-    keys={(r['strip_id'],r['x'],r['y'],r['code']) for r in rows}
+    keys={(r['strip_id'],r['x'],r['y'],'UNKNOWN' if r.get('reason')=='ski_unknown_ot06' else r['code']) for r in rows}
     if not keys or not keys.issubset(valid):raise ValueError('분류할 미분류 좌표를 선택하세요.')
     decisions=list(summary.get('report_classifications',[]));decisions=[d for d in decisions if (d['strip_id'],d['x'],d['y'],d['from_code']) not in keys]
     for strip,x,y,code in sorted(keys):decisions.append({'strip_id':strip,'x':x,'y':y,'from_code':code,'to_code':target,'note':note,'at':datetime.now(timezone.utc).isoformat()})

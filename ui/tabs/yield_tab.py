@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import DEFAULT_MODEL
-from core.gather import load_latest_process_blocks, parse_gather_file
+from core.gather import format_xy_coords, load_latest_process_blocks, parse_gather_file
 from core.ivs import load_ivs_dummy_scrap_strips
 from core.skipdata import load_skipdata_folder
 from core.utils import split_path_list, to_json_plain
@@ -247,11 +247,15 @@ class YieldTab(QWidget):
         table_filter_row.addWidget(QLabel(_("하단 테이블")))
         self.radio_table_all = QRadioButton(_("전체"))
         self.radio_table_mismatch = QRadioButton(_("불일치만"))
+        self.btn_its_coordinates = QPushButton(_('불일치 좌표 확인'))
+        self.btn_its_coordinates.setEnabled(False)
+        self.btn_its_coordinates.clicked.connect(self.show_its_coordinates)
         self.radio_table_all.setChecked(True)
         self.radio_table_all.toggled.connect(self.apply_table_filter)
         self.radio_table_mismatch.toggled.connect(self.apply_table_filter)
         table_filter_row.addWidget(self.radio_table_all)
         table_filter_row.addWidget(self.radio_table_mismatch)
+        table_filter_row.addWidget(self.btn_its_coordinates)
         table_filter_row.addStretch()
         layout.addLayout(table_filter_row)
 
@@ -502,6 +506,13 @@ class YieldTab(QWidget):
                 _('Skipdata를 갱신하고 최신 SKI로 다시 계산하세요.') + '\n' +
                 _('갱신 후에도 차이가 있으면 원본 TXT를 백업하고 해당 Strip 기록을 수율과 성적서에서 제외합니다.'))
             return
+        from core.report_review import record_its_alert
+        try:
+            if record_its_alert(self.summary, self.model_in.text()):
+                QMessageBox.warning(self, _('ITS 게더링 확인 필요'),
+                    _('최종 SKI에 없는 TXT 불량 좌표가 있습니다. 불일치 좌표를 확인한 뒤 다시 계산하세요.'))
+        except OSError as error:
+            self.result.append(_('ITS 게더링 확인 필요') + '\n' + str(error))
         alarms=self.summary.get('dummy_alarms',[])
         if alarms:
             from core.dummy_policy import ALARM_LABELS
@@ -511,7 +522,7 @@ class YieldTab(QWidget):
         if pending:
             QMessageBox.critical(self,_('미분류 불량 코드'),_('UNKNOWN은 검토·분류가 필요합니다. 코드 미리보기에서 원본을 확인하고 분류하세요.')+'\n'+', '.join(f'{c}: {n}' for c,n in pending.items()))
         audit=self.summary.get('its_validation',{})
-        if audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
+        if not self.summary.get('its_gathering_differences') and audit.get('enabled') and (not audit.get('auto_pass') or audit.get('untracked_strips')):
             from core.its_validation import format_audits
             QMessageBox.warning(self,_('ITS 검증 미완료'),format_audits(audit)+'\n'+_('소스 누락 또는 SKI 갱신을 확인한 뒤 수율 계산을 다시 실행하세요.'))
 
@@ -818,6 +829,8 @@ class YieldTab(QWidget):
 
     def refresh_result(self) -> None:
         summary = self.summary
+        differences = summary.get('its_gathering_differences', [])
+        self.btn_its_coordinates.setEnabled(bool(differences))
         if summary.get("mode") == "process":
             self.refresh_process_result(summary)
             self.result.append('\n'+_('OT14 제외: 총 Unit과 불량 Unit에서 차감, 원본 좌표 검증은 유지')+f"\nOT14: {summary.get('ot14_excluded_units',0)} / "+_('원본 총 Unit')+f": {summary.get('gross_total_units',0)}")
@@ -834,6 +847,8 @@ class YieldTab(QWidget):
                 row['strip_id']+(' · '+_('RPT에만 있음 · 집계 범위 밖') if not row.get('required_result',True) else '')+' · '+
                 ', '.join(p+': '+_(LABELS[s]) for p,s in row['processes'].items()) for row in coverage))
             self.append_scrap_review(summary)
+            if differences:
+                self.result.append('\n' + _('ITS 게더링 확인 필요') + f" · {len(differences)} Strip")
             return
         self.result.setPlainText(
             f"LOT: {summary['lot_id']}\n"
@@ -873,6 +888,8 @@ class YieldTab(QWidget):
         self.append_strip_json_validation_summary(summary)
         self.append_bbt_validation_summary(summary)
         self.append_scrap_review(summary)
+        if differences:
+            self.result.append('\n' + _('ITS 게더링 확인 필요') + f" · {len(differences)} Strip")
 
         distribution = summary["xout_distribution"]
         self.xout_table.setRowCount(len(distribution))
@@ -920,6 +937,21 @@ class YieldTab(QWidget):
         self.result.append('\n' + _('전량 양폐 TXT와 최종 SKI 비교') + '\n' + '\n'.join(
             f"{row['strip_id']} · {row['process']} · TXT {row['txt_count']} / SKI {row['ski_count']} · "
             f"{labels[row['status']]}\n{row['source']}" for row in rows))
+
+    def show_its_coordinates(self):
+        rows = self.summary.get('its_gathering_differences', [])
+        if not rows:
+            return
+        selected = self.strip_table.item(self.strip_table.currentRow(), 0)
+        strip_id = selected.text() if selected else ''
+        row = next((item for item in rows if item['strip_id'] == strip_id), rows[0])
+        lines = [f"LOT: {self.summary['lot_id']}   StripID: {row['strip_id']}"]
+        for label, key in [('TXT에만 있는 좌표', 'txt_only'), ('SKI에만 있는 좌표', 'ski_only')]:
+            coords = format_xy_coords({tuple(coord) for coord in row[key]})
+            lines.extend(['', _(label) + f" ({len(coords)})", ', '.join(coords) or '-'])
+        lines.extend(['', _('원본 파일'), 'SKI: ' + self.summary['report_trace']['ski_path']])
+        lines.extend(f"{process}: {path}" for process, paths in row['sources'].items() for path in paths)
+        QMessageBox.information(self, _('불일치 좌표 확인'), '\n'.join(lines))
 
     def filtered_strip_rows(self, rows: list[dict], xout_key: str) -> list[dict]:
         if not hasattr(self, "radio_table_mismatch") or not self.radio_table_mismatch.isChecked():

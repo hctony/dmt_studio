@@ -12,6 +12,7 @@ REASONS={
  'missing_code':'TXT 불량 코드가 비어 있어 UNKNOWN으로 배정',
  'ivs_recovery':'IVS JSON 기록으로 170 코드 보정',
  'ski_unassigned':'SKI 불량 좌표에 대응하는 불량 코드를 찾지 못함',
+ 'ski_unknown_ot06':'최종 SKI 좌표의 UNKNOWN을 성적서 OT06으로 자동 집계',
  'xout_fill':'양폐 Strip의 미배정 좌표를 170으로 보충',
 }
 

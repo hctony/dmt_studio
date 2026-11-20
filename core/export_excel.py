@@ -41,13 +41,13 @@ def export_report_to_2xlsx(
       ok_unit_aggregation.ok_unit_percent,
       final_defects_by_code_including_bbt: {code: {count, ...}}
     """
-    from core.report_review import UNRESOLVED
+    from core.report_review import UNRESOLVED, changed_paths
     from core.report_codes import ordered_report_codes
     pending={code:count for code,count in ordered_report_codes(report) if code.upper() in UNRESOLVED}
     if report.get('mismatch_count',0) or pending or report.get('policy_errors'):
         return {'success':False,'error':_('불일치만 결과가 0개이고 미분류 코드가 없어야 생성할 수 있습니다. 코드 미리보기에서 검토·분류하세요.')+'\n'+str(pending)}
-    from core.report_trace import file_version
-    def changed():return any(file_version(p)!=version for p,version in report.get('source_versions',{}).items())
+    def changed():
+        return changed_paths({**report.get('source_trace', {}), 'file_versions': report.get('source_versions', {})})
     if changed():return {'success':False,'error':_('계산 후 원본이 변경되었습니다. 수율을 다시 계산하세요.')}
     try:
         from openpyxl import load_workbook, Workbook
@@ -218,11 +218,16 @@ def export_report_to_2xlsx(
             ws[label_cell]=label;ws[value_cell]=value
             ws[label_cell].font=Font(bold=True);ws[value_cell].number_format='#,##0'
         decisions=report.get('classifications',[])
-        if decisions:
+        automatic = report.get('automatic_ot06_groups', [])
+        if decisions or automatic:
             review=wb.create_sheet(_('분류 이력'))
             review.append(['StripID','X','Y',_('원본 코드'),_('분류 코드'),_('분류 사유'),'UTC'])
-            for d in decisions:
-                review.append([d['strip_id'],d['x'],d['y'],d['from_code'],d['to_code'],d['note'],d['at']])
+            review_rows = [[d['strip_id'],d['x'],d['y'],d['from_code'],d['to_code'],d['note'],d['at']] for d in decisions]
+            review_rows.extend([group['strip_id'], x, y, 'UNKNOWN', 'OT06',
+                                _('최종 SKI 좌표의 UNKNOWN을 성적서 OT06으로 자동 집계'), None]
+                               for group in automatic for x, y in group['coords'])
+            for row in review_rows:
+                review.append(row)
                 for cell in review[review.max_row]:
                     if isinstance(cell.value,str):cell.data_type='s'
             review.freeze_panes='A2';review.auto_filter.ref=review.dimensions;_autofit_columns(review)

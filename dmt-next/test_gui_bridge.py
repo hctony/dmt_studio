@@ -128,6 +128,31 @@ class GuiTests(unittest.TestCase):
                 row = json.loads(evidence.read('review.json'))[0]
                 self.assertEqual(evidence.read('TXT/' + row['backup']), txt.read_bytes())
 
+    def test_its_coordinate_alert_appears_once_and_coordinates_remain_available(self):
+        txt, ids = self.fixture()
+        ski = self.root / 'final.ski'
+        ski.write_text('RX1234-01,2,1\n')
+        tab = self.tab(6)
+        for field in ('fvi_txt_in', 'ivs_txt_in', 'ivs_json_in', 'txt_in', 'skipdata_in'):
+            getattr(tab, field).clear()
+        tab.vrs_txt_in.setText(str(txt))
+        tab.ski_in.setText(str(ski))
+        tab.strip_json_in.setText(str(ids))
+        tab.units_per_strip_in.setText('4')
+        tab.xout_limit_in.setText('3')
+        with patch.dict(os.environ, {'DMT_CACHE_DIR':str(self.root / 'cache')}):
+            self.action(tab.btn_calc, 'click')
+            self.action(tab.btn_calc, 'click')
+        alerts = [d for _, d in self.dialogs if d.get('title') == 'ITS 게더링 확인 필요']
+        self.assertEqual(len(alerts), 1)
+        tab.radio_table_mismatch.setChecked(True)
+        self.assertEqual(tab.strip_table.item(0,0).text(), 'RX1234-01')
+        self.action(tab.btn_its_coordinates, 'click')
+        detail = self.dialogs[-1][1]['text']
+        self.assertIn('X:001 Y:001', detail)
+        self.assertIn('X:002 Y:001', detail)
+        self.assertIn(str(txt), detail)
+
     def test_ivs_json_loading_and_list_checkbox(self):
         from core.models import DefectRecord
         from core.ivs import records_to_json
@@ -673,7 +698,7 @@ class GuiTests(unittest.TestCase):
         tab.vrs_txt_in.setText(str(txt));tab.strip_json_in.setText(str(ids));tab.ivs_json_in.setText(str(ivs));tab.ski_in.setText(str(ski));tab.units_per_strip_in.setText('4');tab.xout_limit_in.setText('3')
         self.action(tab.btn_calc,'click');self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
         try:
-            self.assertEqual(dict(dialog.codes),{'UNKNOWN':1,'OT06':1})
+            self.assertEqual(dict(dialog.codes),{'OT06':2})
             index=next(i for i,item in enumerate(dialog.codes) if item[0]=='OT06')
             self.action(dialog.code_table,'table',row=index,column=0)
             end=time.monotonic()+3
@@ -740,8 +765,7 @@ class GuiTests(unittest.TestCase):
         target=self.root/'report.xlsx';self.answers['save']=str(target)
         with patch('core.report_review.DATA_DIR',self.root):
             self.action(tab.btn_calc,'click')
-            self.assertTrue(any('UNKNOWN은' in d.get('text','') for k,d in self.dialogs if k=='message'))
-            self.action(tab.btn_export_excel,'click');self.assertFalse(target.exists())
+            self.assertEqual(tab.summary['report_code_distribution'], {'OT06':1})
             self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
             try:
                 self.action(dialog.review_code,'input','SM03');self.action(dialog.review_note,'input','Checked original XML')
@@ -751,6 +775,7 @@ class GuiTests(unittest.TestCase):
                 dialog.reject()
                 for worker in list(getattr(dialog,'_live_workers',())):worker.stop();worker.wait(2000)
             # The export uses precisely the same row predicate as the filter.
+            tab.radio_table_all.setChecked(True)
             tab.summary['per_strip_rows'][0]['final_xout']=2
             self.assertEqual(len(mismatch_rows(tab.summary)),1)
             self.assertFalse(tab.radio_table_mismatch.isChecked())

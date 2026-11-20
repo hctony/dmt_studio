@@ -79,14 +79,15 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(len(guard['incomplete_hosts']),1)
         wrong=reports_for_inputs([export],{'IVS':[export]});self.assertIn('COLLECTION_STAGE_MISMATCH',wrong['errors'])
         export.write_text('changed');changed=reports_for_inputs([export]);self.assertIn('COLLECTION_INPUT_CHANGED',changed['errors'])
-    def test_source_completion_alone_does_not_mark_unknown_as_resolved(self):
+    def test_complete_source_with_ski_only_coordinate_records_automatic_ot06_provenance(self):
         from core.collection import write_export
         from core.yield_calc import calculate_yield_summary_by_process
         self.txt();parsed,report=self.collect();source=parsed[self.pc][0][1]
         target=self.root/'gather.txt';write_export(target,'1,RX-,RX-01\nRX-,RX-01,1,1,T,SM03\nRX-,RX-01,EOS\n',{'RX-01':{'source_mtime':source.source_mtime,'sources':source.sources}},report['receipt'])
         ski=self.root/'final.ski';ski.write_text('RX-01,1,1\nRX-01,2,1\n')
         result=calculate_yield_summary_by_process([target],[],[],[],None,4,3,None,ski)
-        self.assertTrue(result['collection_validation']['complete']);self.assertEqual(result['report_code_distribution']['UNKNOWN'],1)
+        self.assertTrue(result['collection_validation']['complete']);self.assertEqual(result['report_code_distribution']['OT06'],1)
+        self.assertTrue(any(g['reason']=='ski_unknown_ot06' and g['coords']==[[2,1]] for g in result['report_trace']['groups']))
         self.assertEqual(result['report_trace']['collection_validation']['reports'][0]['mode'],'VRS')
     def test_remote_archive_requires_receipt_and_approved_original_root(self):
         from core.collection import write_export,reports_for_inputs
