@@ -76,20 +76,23 @@ app.whenReady().then(async()=>{try{
  // B's actual browser opens the preview, then resolves original files on A.
  await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('#content button')).find(b=>b.textContent==='代碼預覽').click()");
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("!!document.querySelector('.report-code-preview table')"))break;await delay(100);}
- const auditState=await rpc(0,'gui.snapshot');const auditDialog=auditState.dialogs.find(d=>d.title==='성적서 코드 미리보기');assert(auditDialog);const codeTable=walk(auditDialog.content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(codeTable.rows.map(r=>r.slice(0,2)),[['UNKNOWN','1'],['OT06','1']]);
+ const auditState=await rpc(0,'gui.snapshot');const auditDialog=auditState.dialogs.find(d=>d.title==='성적서 코드 미리보기');assert(auditDialog);const codeTable=walk(auditDialog.content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(codeTable.rows.map(r=>r.slice(0,2)),[['OT06','2']]);
  await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-tables table:first-child tbody tr')).find(r=>r.firstChild.textContent==='OT06').firstChild.click()");
  for(let n=0;n<100;n++){if(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources pre')).some(p=>p.textContent.includes('ivs_1=\"1111\"'))"))break;await delay(100);}
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources pre')).some(p=>p.textContent.includes('ivs_1=\"1111\"')&&p.textContent.includes('단일 불량률'))"));
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources pre')).some(p=>p.textContent.includes('▶ L1: TEST-01,1,1'))"));
  assert(await browser.webContents.executeJavaScript("Array.from(document.querySelectorAll('.report-code-sources select')).some(p=>p.textContent.includes('수율 계산.xml'))"));
  assert(await browser.webContents.executeJavaScript("document.querySelector('.report-code-preview').textContent.includes('計算當時的分配依據')"));browser.setSize(1640,1240);await delay(200);fs.writeFileSync(path.join(root,'report-code-preview-zh.png'),(await browser.webContents.capturePage()).toPNG());
- for(const code of ['UNKNOWN']){
+ {
   let state=await rpc(0,'gui.snapshot'),widgets=walk(state.dialogs.find(d=>d.id===auditDialog.id).content);
   const codes=widgets.find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');
-  await rpc(0,'gui.action',{id:codes.id,action:'table',row:codes.rows.findIndex(r=>r[0]===code),column:0});
+  await rpc(0,'gui.action',{id:codes.id,action:'table',row:codes.rows.findIndex(r=>r[0]==='OT06'),column:0});
   const target=widgets.find(w=>w.type==='input'&&w.placeholder.includes('SM03')),note=widgets.find(w=>w.type==='input'&&w.placeholder.includes('필수'));
   await rpc(0,'gui.action',{id:target.id,action:'input',value:'SM03'});await rpc(0,'gui.action',{id:note.id,action:'input',value:'Reviewed original source'});
-  const units=widgets.find(w=>w.type==='table'&&w.headers[0]==='StripID');await rpc(0,'gui.action',{id:units.id,action:'table',row:0,column:0});
+  const units=widgets.find(w=>w.type==='table'&&w.headers[0]==='StripID');
+  const automatic=units.rows.findIndex(row=>row[1]==='2'&&row[5].includes('UNKNOWN'));
+  assert(automatic>=0);
+  await rpc(0,'gui.action',{id:units.id,action:'table',row:automatic,column:0});
   await rpc(0,'gui.action',{id:widgets.find(w=>w.type==='button'&&w.text==='선택 좌표 분류').id,action:'click'});
  }
  const reviewed=await rpc(0,'gui.snapshot'),reviewedCodes=walk(reviewed.dialogs.find(d=>d.id===auditDialog.id).content).find(w=>w.type==='table'&&w.headers[0]==='성적서 코드');assert.deepEqual(reviewedCodes.rows.map(r=>r.slice(0,2)),[['OT06','1'],['SM03','1']]);
