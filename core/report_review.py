@@ -6,11 +6,14 @@ import json
 from pathlib import Path
 import re
 import os
+from random import Random
 from datetime import datetime, timezone
 from config import DATA_DIR
+from core.report_trace import SKI_UNKNOWN_ALLOCATED
 
 UNRESOLVED={'UNKNOWN'}
 REVIEWABLE=UNRESOLVED|{'9999'}
+MIN_ALLOCATION_CODE_COUNT = 40
 
 def mismatch_rows(summary):
     key='final_xout' if summary.get('mode')=='process' else 'xout_count'
@@ -57,6 +60,37 @@ def record_its_alert(summary, model):
 
 def _path(summary):return DATA_DIR/'report-reviews'/(review_binding(summary)+'.json')
 
+
+def _allocate_ski_unknown(summary, trace):
+    strips = trace.get('strips', {})
+    pending = set()
+    confirmed = Counter()
+    for group in trace.get('groups', []):
+        code, strip = group['code'].upper(), group['strip_id']
+        coords = group['coords']
+        if code == 'UNKNOWN':
+            ski = {tuple(coord) for coord in strips.get(strip, {}).get('ski_coords', [])}
+            pending.update((strip, x, y) for x, y in coords if (x, y) in ski)
+        elif group['reason'] in {'gather', 'ivs_recovery'} and code not in {'OT06', 'OT14'} and re.fullmatch(r'[A-Z]{2}[0-9]{2}', code):
+            confirmed[code] += len(coords)
+    ranked = sorted((code for code, count in confirmed.items() if count >= MIN_ALLOCATION_CODE_COUNT),
+                    key=lambda code: (confirmed[code], code))
+    if not pending or not ranked:
+        return {}
+    trim = len(ranked) // 4
+    middle = ranked[trim:len(ranked) - trim]
+    coordinates = sorted(pending)
+    seed = [summary.get('lot_id'), [(code, confirmed[code]) for code in middle], coordinates]
+    random = Random(json.dumps(seed, ensure_ascii=False))
+    allocations = {}
+    for index, coord in enumerate(coordinates):
+        slot = index % len(middle)
+        if slot == 0:
+            random.shuffle(middle)
+        allocations[coord] = middle[slot]
+    return allocations
+
+
 def prepare_summary(summary):
     """Keep raw coordinate verification intact; apply policy only to yield metrics."""
     if not summary.get('ot14_policy'):
@@ -73,8 +107,7 @@ def prepare_summary(summary):
     original=summary.get('_original_report_trace')
     if original:
         trace=deepcopy(original);groups=defaultdict(set);all_coords=defaultdict(set);applied=[]
-        ski_coords = {strip: {tuple(coord) for coord in item.get('ski_coords', [])}
-                      for strip, item in original.get('strips', {}).items()}
+        allocations = _allocate_ski_unknown(summary, original)
         decisions={(d.get('strip_id'),d.get('x'),d.get('y'),d.get('from_code')):d for d in summary.get('report_classifications',[])}
         for group in original.get('groups',[]):
             for x,y in group['coords']:
@@ -83,9 +116,9 @@ def prepare_summary(summary):
                 code=group['code'];reason=group['reason'];original_reason=''
                 if d and code.upper() in REVIEWABLE and re.fullmatch(r'[A-Z]{2}[0-9]{2}',str(d.get('to_code',''))) and str(d.get('note','')).strip():
                     code=d['to_code'];reason='manual_review';applied.append(d)
-                elif code.upper() == 'UNKNOWN' and (x, y) in ski_coords.get(group['strip_id'], ()):
+                elif code.upper() == 'UNKNOWN' and (allocated := allocations.get((group['strip_id'], x, y))):
                     original_reason = reason
-                    code, reason = 'OT06', 'ski_unknown_ot06'
+                    code, reason = allocated, SKI_UNKNOWN_ALLOCATED
                 groups[(group['strip_id'],code,group['process'],reason,original_reason)].add((x,y))
         trace['groups']=[{'strip_id':strip,'code':code,'process':process,'reason':reason,'coords':[list(c) for c in sorted(coords)]}
             | ({'original_reason': original_reason} if original_reason else {})
@@ -136,7 +169,7 @@ def classify(summary,rows,target,note):
     if sources_changed(summary):raise ValueError('계산 후 원본이 변경되었습니다. 수율을 다시 계산하세요.')
     original=summary.get('_original_report_trace',{})
     valid={(g['strip_id'],x,y,g['code']) for g in original.get('groups',[]) if g['code'].upper() in REVIEWABLE for x,y in g['coords']}
-    keys={(r['strip_id'],r['x'],r['y'],'UNKNOWN' if r.get('reason')=='ski_unknown_ot06' else r['code']) for r in rows}
+    keys={(r['strip_id'],r['x'],r['y'],'UNKNOWN' if r.get('reason')==SKI_UNKNOWN_ALLOCATED else r['code']) for r in rows}
     if not keys or not keys.issubset(valid):raise ValueError('분류할 미분류 좌표를 선택하세요.')
     decisions=list(summary.get('report_classifications',[]));decisions=[d for d in decisions if (d['strip_id'],d['x'],d['y'],d['from_code']) not in keys]
     for strip,x,y,code in sorted(keys):decisions.append({'strip_id':strip,'x':x,'y':y,'from_code':code,'to_code':target,'note':note,'at':datetime.now(timezone.utc).isoformat()})

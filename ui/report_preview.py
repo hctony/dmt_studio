@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QTableWidg
     QPushButton,QGroupBox,QTextEdit,QSplitter,QComboBox,QLineEdit,QMessageBox)
 from core.i18n import _
 from core.report_codes import ordered_report_codes
-from core.report_trace import trace_rows,matching_groups,REASONS
+from core.report_trace import trace_rows,matching_groups,REASONS,SKI_UNKNOWN_ALLOCATED
 from core.report_evidence import frozen_text
 from ui.worker_lifetime import start_worker
 from workers.report_workers import ReportEvidenceWorker
@@ -104,9 +104,9 @@ class ReportPreviewDialog(QDialog):
     def classify_rows(self,all_code):
         from core.report_review import classify,REVIEWABLE
         rows=trace_rows(self.trace,self.code,0,sum(n for c,n in self.codes if c==self.code))[0] if all_code else [self.rows[i.row()] for i in self.unit_table.selectionModel().selectedRows()]
-        rows = [row for row in rows if row['code'].upper() in REVIEWABLE or row['reason'] == 'ski_unknown_ot06']
+        rows = [row for row in rows if row['code'].upper() in REVIEWABLE or row['reason'] == SKI_UNKNOWN_ALLOCATED]
         if not rows:
-            QMessageBox.warning(self, _('분류 오류'), _('9999, UNKNOWN 또는 자동 치환된 OT06 좌표를 선택하세요.'));return
+            QMessageBox.warning(self, _('분류 오류'), _('9999, UNKNOWN 또는 자동 배분된 좌표를 선택하세요.'));return
         if all_code and QMessageBox.question(self,_('전체 분류 확인'),_('선택한 좌표를 같은 코드로 분류합니까?')+f'\n{self.code}: {len(rows)} → {self.review_code.text()}',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:return
         try:classify(self.summary,rows,self.review_code.text(),self.review_note.text())
         except (ValueError,OSError) as error:QMessageBox.warning(self,_('분류 오류'),_(str(error)));return
@@ -131,7 +131,7 @@ class ReportPreviewDialog(QDialog):
         if code==self.code:return
         self.code=code;self.offset=0
         groups = list(matching_groups(self.trace, code))
-        pending = code.upper() in ('9999', 'UNKNOWN') or any(group['reason'] == 'ski_unknown_ot06' for group in groups)
+        pending = code.upper() in ('9999', 'UNKNOWN') or any(group['reason'] == SKI_UNKNOWN_ALLOCATED for group in groups)
         self.classify_selected.setEnabled(pending);self.classify_all.setEnabled(pending)
         traced=sum(len(group['coords']) for group in groups)
         if traced!=count:

@@ -81,7 +81,7 @@ class ReportTraceTests(unittest.TestCase):
             [(1, 1, '170'), (2, 1, 'DR01'), (1, 2, 'SM03'), (2, 2, '170')],
             [(1, 1), (2, 1), (1, 2)],
         )
-        self.assertEqual(summary['report_code_distribution'], {'DR01': 1, 'SM03': 1, 'OT06': 1})
+        self.assertEqual(summary['report_code_distribution'], {'DR01': 1, 'SM03': 1, 'UNKNOWN': 1})
         fvi = self.root / 'fvi.txt'
         fvi.write_text(f'1,{self.lot},{self.strip}\n{self.lot},{self.strip},1,1,T,OT12\n{self.lot},{self.strip},EOS\n')
         with_fvi = calculate_yield_summary_by_process(
@@ -139,11 +139,11 @@ class ReportTraceTests(unittest.TestCase):
         from openpyxl import load_workbook
         summary,report=self.fixture([(1,1,''),(2,1,'1111'),(1,2,'OT06'),(2,2,'170')],[(1,1),(2,1),(1,2),(2,2)])
         target=self.root/'report.xlsx';template=Path(__file__).resolve().parent.parent/'resources/templates/report.xlsx'
-        self.assertEqual(dict(ordered_report_codes(report)), {'OT06':4})
+        self.assertEqual(dict(ordered_report_codes(report)), {'OT06':3, 'UNKNOWN':1})
         from core.report_review import classify
         with patch('core.report_review.DATA_DIR',self.root):
-            rows = trace_rows(summary['report_trace'], 'OT06')[0]
-            classify(summary, [row for row in rows if row['reason']=='ski_unknown_ot06'], 'SM03', 'Original reviewed')
+            rows = trace_rows(summary['report_trace'], 'UNKNOWN')[0]
+            classify(summary, rows, 'SM03', 'Original reviewed')
         report=build_yield_report_aggregation(summary,'MODEL')
         self.assertTrue(export_report_to_2xlsx(report,str(template),str(target))['success'])
         workbook=load_workbook(target);sheet=workbook.active
@@ -153,10 +153,9 @@ class ReportTraceTests(unittest.TestCase):
 
     def test_unknown_causes_are_separate_and_live_ski_keeps_line_numbers(self):
         summary,report=self.fixture([(1,1,'')],[(1,1),(2,1)])
-        self.assertEqual(dict(ordered_report_codes(report)),{'OT06':2})
-        rows,total=trace_rows(summary['report_trace'],'OT06')
-        self.assertEqual(total,2);self.assertEqual({r['original_reason'] for r in rows},{'missing_code','ski_unassigned'})
-        self.assertTrue(all(r['reason']=='ski_unknown_ot06' for r in rows))
+        self.assertEqual(dict(ordered_report_codes(report)),{'UNKNOWN':2})
+        rows,total=trace_rows(summary['report_trace'],'UNKNOWN')
+        self.assertEqual(total,2);self.assertEqual({r['reason'] for r in rows},{'missing_code','ski_unassigned'})
         text=live_text(summary['report_trace'],self.root/'final.ski',self.strip,(2,1),'ski')
         self.assertIn('▶ L2:',text);self.assertIn('계산 시점과 파일 크기·수정 시각 일치',text)
         (self.root/'final.ski').write_text(f'{self.strip},1,1\n')
@@ -172,8 +171,8 @@ class ReportTraceTests(unittest.TestCase):
 
     def test_unknown_uses_sixth_column_even_with_extra_or_trailing_columns(self):
         summary,report=self.fixture([(1,1,',metadata'),(2,1,'UNKNOWN,')],[(1,1),(2,1)])
-        rows,total=trace_rows(summary['report_trace'],'OT06');self.assertEqual(total,2)
-        reasons={(r['x'],r['y']):r['original_reason'] for r in rows}
+        rows,total=trace_rows(summary['report_trace'],'UNKNOWN');self.assertEqual(total,2)
+        reasons={(r['x'],r['y']):r['reason'] for r in rows}
         self.assertEqual(reasons,{(1,1):'missing_code',(2,1):'gather'})
         self.assertIn('▶ L2:',live_text(summary['report_trace'],self.root/'gather.txt',self.strip,(1,1),'txt'))
 

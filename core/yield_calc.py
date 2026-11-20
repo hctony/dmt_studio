@@ -1481,6 +1481,7 @@ def calculate_yield_summary_by_process(*args, **kwargs):
 
 def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
     from core.report_review import prepare_summary,mismatch_rows,unresolved_counts
+    from core.report_trace import SKI_UNKNOWN_ALLOCATED
     prepare_summary(summary)
     total_units = int(summary.get("total_units", 0) or 0)
     ok_units = int(summary.get("good_units", 0) or 0)
@@ -1552,8 +1553,8 @@ def build_yield_report_aggregation(summary: dict, model_name: str = "") -> dict:
         "mismatch_count": len(mismatch_rows(summary)),
         "unresolved_codes": unresolved_counts(summary),
         "classifications": summary.get('report_trace',{}).get('classifications',[]),
-        "automatic_ot06_groups": [group for group in summary.get('report_trace', {}).get('groups', [])
-                                  if group['reason'] == 'ski_unknown_ot06'],
+        "automatic_allocation_groups": [group for group in summary.get('report_trace', {}).get('groups', [])
+                                        if group['reason'] == SKI_UNKNOWN_ALLOCATED],
         "source_versions": summary.get('report_trace',{}).get('file_versions',{}),
         "source_trace": {key: value for key, value in summary.get('report_trace', {}).items()
                          if key in {'bbt_folder', 'rpt_audit_versions'}},

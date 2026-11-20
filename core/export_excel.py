@@ -218,13 +218,13 @@ def export_report_to_2xlsx(
             ws[label_cell]=label;ws[value_cell]=value
             ws[label_cell].font=Font(bold=True);ws[value_cell].number_format='#,##0'
         decisions=report.get('classifications',[])
-        automatic = report.get('automatic_ot06_groups', [])
+        automatic = report.get('automatic_allocation_groups', [])
         if decisions or automatic:
             review=wb.create_sheet(_('분류 이력'))
             review.append(['StripID','X','Y',_('원본 코드'),_('분류 코드'),_('분류 사유'),'UTC'])
             review_rows = [[d['strip_id'],d['x'],d['y'],d['from_code'],d['to_code'],d['note'],d['at']] for d in decisions]
-            review_rows.extend([group['strip_id'], x, y, 'UNKNOWN', 'OT06',
-                                _('최종 SKI 좌표의 UNKNOWN을 성적서 OT06으로 자동 집계'), None]
+            review_rows.extend([group['strip_id'], x, y, 'UNKNOWN', group['code'],
+                                _('최종 SKI의 UNKNOWN을 중간 빈도 불량 코드에 자동 배분'), None]
                                for group in automatic for x, y in group['coords'])
             for row in review_rows:
                 review.append(row)

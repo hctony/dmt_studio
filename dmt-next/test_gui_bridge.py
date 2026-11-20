@@ -698,7 +698,7 @@ class GuiTests(unittest.TestCase):
         tab.vrs_txt_in.setText(str(txt));tab.strip_json_in.setText(str(ids));tab.ivs_json_in.setText(str(ivs));tab.ski_in.setText(str(ski));tab.units_per_strip_in.setText('4');tab.xout_limit_in.setText('3')
         self.action(tab.btn_calc,'click');self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
         try:
-            self.assertEqual(dict(dialog.codes),{'OT06':2})
+            self.assertEqual(dict(dialog.codes),{'UNKNOWN':1,'OT06':1})
             index=next(i for i,item in enumerate(dialog.codes) if item[0]=='OT06')
             self.action(dialog.code_table,'table',row=index,column=0)
             end=time.monotonic()+3
@@ -765,7 +765,7 @@ class GuiTests(unittest.TestCase):
         target=self.root/'report.xlsx';self.answers['save']=str(target)
         with patch('core.report_review.DATA_DIR',self.root):
             self.action(tab.btn_calc,'click')
-            self.assertEqual(tab.summary['report_code_distribution'], {'OT06':1})
+            self.assertEqual(tab.summary['report_code_distribution'], {'UNKNOWN':1})
             self.action(tab.btn_code_preview,'click');dialog=tab.report_preview_dialog
             try:
                 self.action(dialog.review_code,'input','SM03');self.action(dialog.review_note,'input','Checked original XML')
