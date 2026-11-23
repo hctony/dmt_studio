@@ -12,7 +12,7 @@ from config import DATA_DIR
 from core.collection import iter_blocks
 from core.gather import parse_xy_from_gather_line
 from core.i18n import _
-from core.inspection_history import decode_original
+from core.inspection_history import decode_original, original, search
 
 
 CONFIG_NAME = 'network-gathering-config.json'
@@ -64,11 +64,32 @@ def _source_root(path, ivs_roots):
     return None
 
 
+def _station_locations(source, roots):
+    yield source
+    for root in roots:
+        if _source_root(source, [root]) is None:
+            continue
+        alternate = root / source.name
+        if root.name.casefold() == 'bdm_backup' and source.parent == root:
+            alternate = root.parent / source.name
+        elif source.parent == root and root.name.casefold() != 'bdm_backup':
+            alternate = root / 'BDM_BACKUP' / source.name
+        if alternate != source and _source_root(alternate, roots) is not None:
+            yield alternate
+
+
 def source_candidates(values, ivs_roots):
     return list(dict.fromkeys(path for value in values if value
                               and (path := Path(value)).suffix.lower() == '.txt'
                               and '..' not in path.parts
                               and _source_root(path, ivs_roots) is not None))
+
+
+def snapshot_hashes(paths):
+    from core.collection import cache_root
+    objects = cache_root() / 'collector' / 'objects'
+    return frozenset(path.stem for value in paths if (path := Path(value)).parent == objects
+                     and path.suffix.lower() == '.txt' and re.fullmatch(r'[0-9a-f]{64}', path.stem))
 
 
 def _remote_allowed(path):
@@ -92,43 +113,66 @@ def _digest(path):
 class Transfer:
     source: Path
     destination: Path
-    resolved_source: Path
+    resolved_source: Path | None
     resolved_destination: Path
     version: tuple
     digest: str
     strips: tuple[str, ...]
+    archive_id: str | None = None
+    archive_mtime_ns: int = 0
 
 
-def inspect_transfer(source, station, roots, lot, strip_id, coords):
+def _load_source(source, roots, lot, strip_id, hashes):
+    for candidate in _station_locations(source, roots['IVS']):
+        try:
+            actual_source = candidate.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        _remote_allowed(candidate)
+        ivs_root = _source_root(candidate, roots['IVS'])
+        if not actual_source.is_relative_to(ivs_root.resolve(strict=True)) or candidate.is_symlink() or not actual_source.is_file():
+            raise PermissionError(_('게더링 호기 경로를 확인하세요.'))
+        stamp = _fingerprint(actual_source)
+        body = actual_source.read_bytes()
+        if _fingerprint(actual_source) != stamp:
+            raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
+        digest = hashlib.sha256(body).hexdigest()
+        if candidate == source or not hashes or digest in hashes:
+            return actual_source, stamp, body, None, 0
+    if hashes:
+        matches = [item for item in search(lot=lot, strip=strip_id, mode='IVS')
+                   if Path(item['source_path']) == source and item['hash'] in hashes]
+        if matches and len({item['hash'] for item in matches}) == 1:
+            item = matches[0]
+            row, body, _block = original(item['id'])
+            return None, (), body, item['id'], row['source_mtime_ns']
+    raise FileNotFoundError(_('IVS 설비 원본과 검증된 수집 보관본을 찾지 못했습니다. IVS를 다시 수집하세요.')
+                            + '\n' + str(source))
+
+
+def inspect_transfer(source, station, roots, lot, strip_id, coords, hashes=()):
     if source not in source_candidates([source], roots['IVS']) or station not in roots['VRS']:
         raise PermissionError(_('게더링 호기 경로를 확인하세요.'))
     _remote_allowed(source)
     _remote_allowed(station)
-    actual_source = source.resolve(strict=True)
     actual_station = station.resolve(strict=True)
-    ivs_root = _source_root(source, roots['IVS'])
-    if not actual_source.is_relative_to(ivs_root.resolve(strict=True)) or source.is_symlink() or not actual_source.is_file():
-        raise PermissionError(_('게더링 호기 경로를 확인하세요.'))
     if not station.is_dir() or station.is_symlink():
         raise NotADirectoryError(str(station))
     # Use resolved paths for the write and reject changes to the named roots before execution.
     target = actual_station / source.name
-    if actual_source == target or os.path.lexists(target):
+    if os.path.lexists(target):
         raise FileExistsError(_('VRS 폴더에 같은 이름의 TXT가 있습니다.') + '\n' + str(target))
-    stamp = _fingerprint(actual_source)
-    body = actual_source.read_bytes()
-    if _fingerprint(actual_source) != stamp:
-        raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
+    actual_source, stamp, body, archive_id, archive_mtime_ns = _load_source(source, roots, lot, strip_id, hashes)
     blocks = list(iter_blocks(decode_original(body).splitlines()))
     matches = [block for block in blocks if (block['lot'], block['strip']) == (lot, strip_id)]
     if not matches or not coords.intersection(parse_xy_from_gather_line(line) for line in matches[-1]['lines']):
         raise ValueError(_('이 파일에서 선택한 Strip의 미반영 IVS 좌표를 확인할 수 없습니다.'))
     return Transfer(source, station / source.name, actual_source, target, stamp, hashlib.sha256(body).hexdigest(),
-                    tuple(sorted({block['strip'] for block in blocks})))
+                    tuple(sorted({block['strip'] for block in blocks})), archive_id, archive_mtime_ns)
 
 
-def move_transfer(plan, roots, lot, strip_id, coords):
-    if inspect_transfer(plan.source, plan.destination.parent, roots, lot, strip_id, coords) != plan:
+def move_transfer(plan, roots, lot, strip_id, coords, hashes=()):
+    if inspect_transfer(plan.source, plan.destination.parent, roots, lot, strip_id, coords, hashes) != plan:
         raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
     source, target = plan.resolved_source, plan.resolved_destination
     temporary = None
@@ -137,12 +181,19 @@ def move_transfer(plan, roots, lot, strip_id, coords):
     try:
         with NamedTemporaryFile(dir=target.parent, prefix='.dmt-ivs-', suffix='.tmp', delete=False) as stage:
             temporary = Path(stage.name)
-            with source.open('rb') as original:
-                shutil.copyfileobj(original, stage)
+            if source is None:
+                _row, body, _block = original(plan.archive_id)
+                stage.write(body)
+            else:
+                with source.open('rb') as stream:
+                    shutil.copyfileobj(stream, stage)
             stage.flush()
             os.fsync(stage.fileno())
-        shutil.copystat(source, temporary)
-        if _fingerprint(source) != plan.version or _digest(temporary) != plan.digest:
+        if source is None:
+            os.utime(temporary, ns=(plan.archive_mtime_ns, plan.archive_mtime_ns))
+        else:
+            shutil.copystat(source, temporary)
+        if (source is not None and _fingerprint(source) != plan.version) or _digest(temporary) != plan.digest:
             raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
         if os.name == 'nt':
             temporary.rename(target)  # Windows rename refuses to overwrite.
@@ -150,9 +201,10 @@ def move_transfer(plan, roots, lot, strip_id, coords):
             os.link(temporary, target)  # Atomic no-overwrite publish on the destination filesystem.
         published = True
         published_version = _fingerprint(target)
-        if _fingerprint(source) != plan.version:
-            raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
-        source.unlink()
+        if source is not None:
+            if _fingerprint(source) != plan.version:
+                raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
+            source.unlink()
     except Exception as error:
         if published:
             try:

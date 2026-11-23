@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QInputDialog, QLa
 
 from core.gather import format_xy_coords, parse_xy_from_gather_line
 from core.i18n import _
-from core.ivs_result_transfer import configured_roots, inspect_transfer, move_transfer, source_candidates
+from core.ivs_result_transfer import configured_roots, inspect_transfer, move_transfer, snapshot_hashes, source_candidates
 from ui.worker_lifetime import start_worker
 
 
@@ -176,8 +176,9 @@ class ItsCoordinateCompare(QDialog):
         if not ok or choice not in stations:
             return
         coords = {tuple(coord) for coord in row['ivs_txt_only']}
-        self.transfer_context = (strip, coords)
-        self.start_transfer(partial(inspect_transfer, source, stations[choice], roots, self.lot, strip, coords),
+        hashes = snapshot_hashes(ivs.get('selected_origins', []))
+        self.transfer_context = (strip, coords, hashes)
+        self.start_transfer(partial(inspect_transfer, source, stations[choice], roots, self.lot, strip, coords, hashes),
                             self.confirm_transfer)
 
     def start_transfer(self, operation, completed):
@@ -190,38 +191,46 @@ class ItsCoordinateCompare(QDialog):
 
     @Slot(object)
     def confirm_transfer(self, plan):
-        strip, coords = self.transfer_context
+        strip, coords, hashes = self.transfer_context
         strips = ', '.join(plan.strips[:20])
         if len(plan.strips) > 20:
             strips += ' …'
-        message = _('파일명과 내용 그대로 전체 TXT를 이동합니다. IVS 폴더에서 원본이 사라집니다.')
+        if plan.archive_id:
+            title = _('IVS 수집 보관본 복구 확인')
+            message = _('설비 원본이 없어서 수집 보관본을 원래 파일명과 내용으로 VRS에 복구합니다.')
+            actual_source = plan.source
+        else:
+            title = _('IVS 결과 TXT 이동 확인')
+            message = _('파일명과 내용 그대로 전체 TXT를 이동합니다. IVS 폴더에서 원본이 사라집니다.')
+            actual_source = plan.resolved_source
         if len(plan.strips) > 1:
-            message += '\n' + _('이 TXT에 들어 있는 다른 Strip도 함께 이동됩니다.')
+            message += '\n' + _('이 TXT에 들어 있는 다른 Strip도 함께 처리됩니다.')
         answer = QMessageBox.question(
-            self, _('IVS 결과 TXT 이동 확인'),
-            f'{message}\n\n{plan.source}\n→ {plan.destination}\n\nStrip ({len(plan.strips)}): {strips}',
+            self, title,
+            f'{message}\n\n{actual_source}\n→ {plan.destination}\n\nStrip ({len(plan.strips)}): {strips}',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
             self.transfer_pending = False
             self.refresh()
             return
-        self.start_transfer(partial(self.execute_transfer, plan, strip, coords), self.transfer_completed)
+        self.start_transfer(partial(self.execute_transfer, plan, strip, coords, hashes), self.transfer_completed)
 
-    def execute_transfer(self, plan, strip, coords):
-        target = move_transfer(plan, configured_roots(self.model), self.lot, strip, coords)
-        return plan.source, target
+    def execute_transfer(self, plan, strip, coords, hashes):
+        target = move_transfer(plan, configured_roots(self.model), self.lot, strip, coords, hashes)
+        return plan, target
 
     @Slot(object)
     def transfer_completed(self, result):
-        source, target = result
-        self.moved_sources.add(source)
+        plan, target = result
+        self.moved_sources.add(plan.source)
         self.summary['ivs_transfer_requires_recalculation'] = True
         from core.report_review import prepare_summary
         prepare_summary(self.summary)
         self.transfer_pending = False
         self.refresh()
-        QMessageBox.information(self, _('IVS 결과 TXT 이동 완료'), str(target) + '\n\n' +
+        title = _('IVS 수집 보관본 복구 완료') if plan.archive_id else _('IVS 결과 TXT 이동 완료')
+        QMessageBox.information(self, title, str(target) + '\n\n' +
                                 _('ITS 게더링에서 반영한 뒤 최신 SKI와 공정 TXT를 다시 불러오세요.'))
 
     @Slot(str)

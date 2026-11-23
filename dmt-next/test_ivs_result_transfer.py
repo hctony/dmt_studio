@@ -1,9 +1,11 @@
+import hashlib
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from core.ivs_result_transfer import inspect_transfer, move_transfer, source_candidates
+from core.ivs_result_transfer import inspect_transfer, move_transfer, snapshot_hashes, source_candidates
 
 
 class IvsResultTransferTests(unittest.TestCase):
@@ -82,3 +84,40 @@ class IvsResultTransferTests(unittest.TestCase):
             inspect_transfer(self.source, other, self.roots, 'RX1-', 'RX1-01', self.coords)
         with self.assertRaises(ValueError):
             inspect_transfer(self.source, self.vrs, self.roots, 'RX1-', 'RX1-01', {(4,1)})
+
+    def test_missing_live_file_can_be_moved_from_the_same_station_backup_folder(self):
+        backup = self.ivs / 'BDM_BACKUP'
+        backup.mkdir()
+        moved = self.source.rename(backup / self.source.name)
+        body = moved.read_bytes()
+        plan = self.inspect()
+        self.assertEqual(plan.resolved_source, moved.resolve())
+        self.assertEqual(self.move(plan), self.destination)
+        self.assertFalse(moved.exists())
+        self.assertEqual(self.destination.read_bytes(), body)
+
+    def test_missing_live_file_recovers_verified_inspection_archive_under_original_name(self):
+        from core.inspection_history import record_file
+        body = self.source.read_bytes()
+        timestamp = self.source.stat().st_mtime_ns
+        checksum = hashlib.sha256(body).hexdigest()
+        cache = self.ivs.parent / 'cache'
+        objects = cache / 'collector' / 'objects'
+        objects.mkdir(parents=True)
+        captured = objects / f'{checksum}.txt'
+        captured.write_bytes(body)
+        with patch.dict(os.environ, {'DMT_CACHE_DIR':str(cache)}):
+            record_file({'path':str(self.source), 'object':str(captured), 'sha256':checksum,
+                         'size':len(body), 'mtime_ns':timestamp}, 'RX1-', 'IVS')
+            self.source.unlink()
+            with self.assertRaises(FileNotFoundError):
+                self.inspect()
+            hashes = snapshot_hashes([str(captured)])
+            request = (self.source, self.vrs, self.roots, 'RX1-', 'RX1-01', self.coords, hashes)
+            plan = inspect_transfer(*request)
+            self.assertIsNone(plan.resolved_source)
+            self.assertTrue(plan.archive_id)
+            move_transfer(plan, self.roots, 'RX1-', 'RX1-01', self.coords, hashes)
+            self.assertEqual(self.destination.read_bytes(), body)
+            self.assertEqual(self.destination.stat().st_mtime_ns, timestamp)
+            self.assertTrue(captured.exists())
