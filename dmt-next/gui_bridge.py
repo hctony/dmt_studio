@@ -36,6 +36,7 @@ class Controller(C.QObject):
         self.restore_inputs()
         self.last_work_roots = None
         self.last_work_inputs = None
+        self.last_gathering_config = None
         from workflow_bridge import WorkflowBridge
         self.action_depth = 0
         self.workflow = WorkflowBridge(self, self.input_path.parent)
@@ -251,6 +252,15 @@ class Controller(C.QObject):
         if os.environ.get('DMT_REMOTE_SESSION') == '1':
             return
         from remote_paths import configured_work_roots
+        from core.ivs_result_transfer import CONFIG_NAME
+        from core.yield_handoff import _write
+        from ui.tabs.gathering_tab import GatheringModePage
+        gathering_tab = self.window.centralWidget().widget(3)
+        settings = {page.mode: [page.ip_in.text(), page.path_in.text()]
+                    for page in gathering_tab.findChildren(GatheringModePage) if page.mode in {'IVS', 'VRS'}}
+        if settings != self.last_gathering_config:
+            _write(self.input_path.parent / CONFIG_NAME, json.dumps(settings, ensure_ascii=False))
+            self.last_gathering_config = settings
         fields = [(key.rsplit('/', 1)[-1], widget.text()) for key, widget in self.input_widgets()
                   if isinstance(widget, W.QLineEdit)]
         if fields == self.last_work_inputs:
@@ -258,7 +268,6 @@ class Controller(C.QObject):
         gathering = [row['path'] for row in self.gathering_roots()]
         roots = configured_work_roots(self.input_path.parent, gathering, fields)
         if roots != self.last_work_roots:
-            from core.yield_handoff import _write
             _write(self.input_path.parent / 'network-work-roots.json', json.dumps(roots, ensure_ascii=False))
             self.last_work_roots = roots
         self.last_work_inputs = fields

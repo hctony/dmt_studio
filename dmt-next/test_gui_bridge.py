@@ -219,6 +219,54 @@ class GuiTests(unittest.TestCase):
         self.action(tab.btn_load,'click');self.assertEqual(len(tab.records),1)
         self.action(tab.download_group_list,'list-check',False,row=0)
         self.assertEqual(tab.download_group_list.item(0).checkState(),C.Qt.Unchecked)
+
+    def test_ivs_result_transfer_requires_confirmation_and_uses_the_chosen_vrs_station(self):
+        txt, _ids = self.fixture()
+        folder = self.root / 'ivs'
+        first = self.root / 'vrs1'
+        second = self.root / 'vrs2'
+        for path in (folder, first, second):
+            path.mkdir()
+        source = folder / 'original.TXT'
+        body = txt.read_bytes()
+        source.write_bytes(body)
+        ski = self.root / 'final.ski'
+        ski.write_text('RX1234-01,2,1\n')
+        tab = self.tab(6)
+        for name in ('txt_in', 'vrs_txt_in', 'fvi_txt_in', 'ivs_json_in', 'strip_json_in', 'skipdata_in'):
+            getattr(tab, name).clear()
+        tab.ivs_txt_in.setText(str(source))
+        tab.ski_in.setText(str(ski))
+        tab.units_per_strip_in.setText('4')
+        tab.xout_limit_in.setText('3')
+        tab.chk_excel_ivs.setChecked(True)
+        with patch.dict(os.environ, {'DMT_CACHE_DIR':str(self.root/'cache')}):
+            self.action(tab.btn_calc, 'click')
+        self.action(tab.btn_its_coordinates, 'click')
+        dialog = tab.its_coordinates_dialog
+        self.assertTrue(dialog.move.isEnabled())
+        self.answers['item'] = lambda data:data['items'][1]
+        self.answers['message'] = W.QMessageBox.No.value
+        roots = {'IVS':[folder], 'VRS':[first,second]}
+        def wait_for_finished():
+            end = time.monotonic()+5
+            while dialog.transfer_pending and time.monotonic()<end:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.assertFalse(dialog.transfer_pending)
+        with patch('ui.its_coordinate_compare.configured_roots',return_value=roots):
+            self.action(dialog.move, 'click')
+            wait_for_finished()
+            self.assertTrue(source.exists())
+            self.answers['message'] = W.QMessageBox.Yes.value
+            self.action(dialog.move, 'click')
+            wait_for_finished()
+        self.assertFalse(source.exists())
+        self.assertFalse((first/source.name).exists())
+        self.assertEqual((second/source.name).read_bytes(),body)
+        self.assertTrue(tab.summary['ivs_transfer_requires_recalculation'])
+        self.assertFalse(dialog.move.isEnabled())
+        self.action(dialog, 'reject')
     def test_lm_preview_cancel_then_execute_with_backup(self):
         tab=self.tab(8);smk=self.root/'smk';pmk=self.root/'pmk';smk.mkdir();pmk.mkdir()
         (smk/'S1.smk').write_text('sample');(pmk/'x_Master.pmk').write_text('S1\nS2\n')

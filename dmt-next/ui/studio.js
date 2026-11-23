@@ -77,7 +77,7 @@ function renderProgress(){
  let host=$('task-progress');if(!host){host=el('section','group');host.id='task-progress';host.setAttribute('aria-label',tr('작업 진행 현황','工作進度'));$('content').before(host);}
  host.replaceChildren();const tasks=snapshot?.tasks||[];host.hidden=!tasks.length;
  const names={'IVS 수집 중지 중':['IVS 수집 중지 중','正在停止 IVS 收集'],'NAS 연결 중':['NAS 연결 중','正在連接 NAS'],'폴더 검색 중':['폴더 검색 중','正在搜尋資料夾'],'현재 Trial 진행률':['현재 Trial 진행률','目前 Trial 進度'],'작업 진행 중':['작업 진행 중','工作進行中']};
- for(const task of tasks){const label=tr(...(names[task.stage]||names['작업 진행 중']));const percent=task.max>0?Math.floor(task.value/task.max*100):null;
+ for(const task of tasks){const label=task.stage==='IVS 결과 TXT 이동'?t(task.stage):tr(...(names[task.stage]||names['작업 진행 중']));const percent=task.max>0?Math.floor(task.value/task.max*100):null;
  const text=label+(percent===null?'…':` · ${percent}% (${task.value}/${task.max})`)+tr(` · ${task.elapsed}초 경과`,` · 已經過 ${task.elapsed} 秒`);
  const bar=el('progress');bar.setAttribute('aria-label',label);if(task.max>0){bar.max=task.max;bar.value=task.value;}
  host.append(el('strong','',text),bar,el('p','',task.detail||tr('전체 수량을 확인하는 중입니다.','正在確認總數量。')));

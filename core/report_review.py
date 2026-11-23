@@ -146,6 +146,8 @@ def prepare_summary(summary):
     summary['report_policy_errors']=[] if 0<=ng<=total else ['OT14_EXCLUSION_INVALID']
     summary['report_policy_errors'].extend(summary.get('rework_scope_errors',[]))
     from core.i18n import _
+    if summary.get('ivs_transfer_requires_recalculation'):
+        summary['report_policy_errors'].append(_('ITS 게더링에서 반영한 뒤 최신 SKI와 공정 TXT를 다시 불러오세요.'))
     awaiting = sorted({row['strip_id'] for row in summary.get('whole_strip_review', [])
                        if row['status'] == 'awaiting_ski'})
     if awaiting:

@@ -3,7 +3,7 @@ const http=require('node:http'),fs=require('node:fs/promises'),sync=require('nod
 const {pipeline}=require('node:stream/promises');
 const deny=message=>{const e=new Error(message);e.status=403;return e;};
 const within=(root,file)=>{const relative=path.relative(root,file);return relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative));};
-const protectedPath=file=>file.split(/[\\/]/).some(p=>['.env','.git','.ssh','.aws','settings.ini','network-server.json','network-work-roots.json','client-connection.json'].includes(p.toLowerCase()));
+const protectedPath=file=>file.split(/[\\/]/).some(p=>['.env','.git','.ssh','.aws','settings.ini','network-server.json','network-work-roots.json','network-gathering-config.json','client-connection.json'].includes(p.toLowerCase()));
 const controls=widget=>widget?[widget,...(widget.children||[]).flatMap(controls),...controls(widget.content)]:[];
 const json=(res,value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 async function body(req,limit=2*1024*1024){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit){const e=new Error('파일/요청이 너무 큽니다. / 檔案或請求過大。');e.status=413;throw e;}chunks.push(chunk);}return Buffer.concat(chunks);}

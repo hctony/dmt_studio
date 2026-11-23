@@ -89,5 +89,5 @@ def validate_input(controller, widget, value):
 
 def protected_relative(value):
     return any(part.lower() in {'.env', '.git', '.ssh', '.aws', 'settings.ini', 'network-server.json',
-                               'network-work-roots.json', 'client-connection.json'}
+                               'network-work-roots.json', 'network-gathering-config.json', 'client-connection.json'}
                for part in re.split(r'[\\/]', value))

@@ -1047,6 +1047,9 @@ def _calculate_yield_summary_by_process(
                  for process, coords in active_txt_coords.items() if coords - ski_coords_for_strip - bbt_coords},
             )
             if difference:
+                difference['ivs_txt_only'] = sorted(active_txt_coords.get('IVS', set())
+                                                     - active_txt_coords.get('VRS', set())
+                                                     - ski_coords_for_strip - bbt_coords)
                 ski_txt_differences.append(difference)
                 if difference['txt_only']:
                     its_gathering_differences.append(difference)
