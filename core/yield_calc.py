@@ -1012,11 +1012,16 @@ def _calculate_yield_summary_by_process(
         xml_x_count = infer_x_count_for_strip(units_per_strip, [bbt_coords, ski_coords_for_strip, *txt_coords.values()])
         limited_full_txt = False
         awaiting_ski = False
+        ivs_review_coords = set()
         for process, coords in txt_coords.items():
             if not _is_full_txt_grid(coords, units_per_strip):
                 continue
             source = process_selected_sources[process][strip_id]
             status = scrap_review.check(strip_id, process, source, input_versions[source], len(ski_coords_for_strip), units_per_strip)
+            if process == 'IVS' and status in {'awaiting_ski', 'archived'}:
+                # The repair action verifies the live IVS TXT independently of report eligibility.
+                ivs_review_coords = set().union(*(positions for code, positions in txt_codes[process].items()
+                                                 if code != '9998' or not (txt_first or strip_id in its_history)))
             if status == 'archived':
                 archived_by_process[process].add(strip_id)
                 txt_codes[process] = {}
@@ -1046,10 +1051,12 @@ def _calculate_yield_summary_by_process(
                 {process: [process_selected_sources[process][strip_id]]
                  for process, coords in active_txt_coords.items() if coords - ski_coords_for_strip - bbt_coords},
             )
-            if difference:
-                difference['ivs_txt_only'] = sorted(active_txt_coords.get('IVS', set())
-                                                     - active_txt_coords.get('VRS', set())
-                                                     - ski_coords_for_strip - bbt_coords)
+            ivs_coords = active_txt_coords.get('IVS', set()) | ivs_review_coords
+            transfer_coords = ivs_coords - active_txt_coords.get('VRS', set()) - ski_coords_for_strip - bbt_coords
+            if difference or transfer_coords:
+                if not difference:
+                    difference = {'strip_id': strip_id, 'txt_only': [], 'ski_only': [], 'sources': {}}
+                difference['ivs_txt_only'] = sorted(transfer_coords)
                 ski_txt_differences.append(difference)
                 if difference['txt_only']:
                     its_gathering_differences.append(difference)

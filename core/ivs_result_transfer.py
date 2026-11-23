@@ -52,11 +52,23 @@ def configured_roots(model):
     return roots
 
 
+def _source_root(path, ivs_roots):
+    for root in ivs_roots:
+        if path.is_relative_to(root):
+            return root
+        # Older IVS profiles point at BDM_BACKUP while the machine can write
+        # completed TXT files directly to the same configured bdm_kinsus share.
+        share_name = root.drive.rsplit('\\', 1)[-1] if root.parent == Path(root.anchor) else root.parent.name
+        if root.name.casefold() == 'bdm_backup' and share_name.casefold() == 'bdm_kinsus' and path.parent == root.parent:
+            return root.parent
+    return None
+
+
 def source_candidates(values, ivs_roots):
     return list(dict.fromkeys(path for value in values if value
                               and (path := Path(value)).suffix.lower() == '.txt'
                               and '..' not in path.parts
-                              and any(path.is_relative_to(root) for root in ivs_roots)))
+                              and _source_root(path, ivs_roots) is not None))
 
 
 def _remote_allowed(path):
@@ -94,7 +106,7 @@ def inspect_transfer(source, station, roots, lot, strip_id, coords):
     _remote_allowed(station)
     actual_source = source.resolve(strict=True)
     actual_station = station.resolve(strict=True)
-    ivs_root = next(root for root in roots['IVS'] if source.is_relative_to(root))
+    ivs_root = _source_root(source, roots['IVS'])
     if not actual_source.is_relative_to(ivs_root.resolve(strict=True)) or source.is_symlink() or not actual_source.is_file():
         raise PermissionError(_('게더링 호기 경로를 확인하세요.'))
     if not station.is_dir() or station.is_symlink():

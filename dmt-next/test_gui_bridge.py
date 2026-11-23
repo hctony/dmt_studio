@@ -222,26 +222,47 @@ class GuiTests(unittest.TestCase):
 
     def test_ivs_result_transfer_requires_confirmation_and_uses_the_chosen_vrs_station(self):
         txt, _ids = self.fixture()
-        folder = self.root / 'ivs'
+        from core.collection import write_export
+        share = self.root / 'bdm_kinsus'
+        folder = share / 'BDM_BACKUP'
         first = self.root / 'vrs1'
         second = self.root / 'vrs2'
         for path in (folder, first, second):
-            path.mkdir()
-        source = folder / 'original.TXT'
-        body = txt.read_bytes()
+            path.mkdir(parents=True)
+        source = share / 'original.TXT'
+        strip = 'RX1234-01'
+        body = ('1,RX1234-,RX1234-01\r\n' + ''.join(
+            f'RX1234-,{strip},{x},{y},T,SM03\r\n' for y in range(1,6) for x in range(1,18)
+        ) + f'RX1234-,{strip},EOS\r\n').encode()
         source.write_bytes(body)
+        write_export(txt, body.decode(), {strip: {'source_mtime':source.stat().st_mtime, 'sources':[str(source)]}})
         ski = self.root / 'final.ski'
-        ski.write_text('RX1234-01,2,1\n')
+        ski.write_text(f'{strip},16,2\n{strip},13,5\n{strip},14,5\n')
+        bbt = self.root / 'rpt'
+        bbt.mkdir()
+        (bbt / f'{strip}.rpt').write_text('X:016 Y:002 = 1 - OT14\nX:013 Y:005 = 1 - OT14\n')
         tab = self.tab(6)
         for name in ('txt_in', 'vrs_txt_in', 'fvi_txt_in', 'ivs_json_in', 'strip_json_in', 'skipdata_in'):
             getattr(tab, name).clear()
-        tab.ivs_txt_in.setText(str(source))
+        tab.ivs_txt_in.setText(str(txt))
         tab.ski_in.setText(str(ski))
-        tab.units_per_strip_in.setText('4')
-        tab.xout_limit_in.setText('3')
+        tab.skipdata_in.setText(str(bbt))
+        tab.units_per_strip_in.setText('85')
+        tab.xout_limit_in.setText('17')
         tab.chk_excel_ivs.setChecked(True)
         with patch.dict(os.environ, {'DMT_CACHE_DIR':str(self.root/'cache')}):
             self.action(tab.btn_calc, 'click')
+            self.assertEqual(tab.summary['whole_strip_review'][0]['status'], 'awaiting_ski')
+            self.assertEqual(tab.summary['its_gathering_differences'], [])
+            self.assertEqual(len(tab.summary['ski_txt_differences'][0]['ivs_txt_only']),82)
+            self.action(tab.btn_its_coordinates, 'click')
+            self.assertTrue(tab.its_coordinates_dialog.move.isEnabled())
+            self.action(tab.its_coordinates_dialog, 'reject')
+            original_time = ski.stat()
+            os.utime(ski, ns=(original_time.st_atime_ns, original_time.st_mtime_ns+2_000_000_000))
+            self.action(tab.btn_calc, 'click')
+        self.assertEqual(tab.summary['whole_strip_review'][0]['status'], 'archived')
+        self.assertEqual(len(tab.summary['ski_txt_differences'][0]['ivs_txt_only']),82)
         self.action(tab.btn_its_coordinates, 'click')
         dialog = tab.its_coordinates_dialog
         self.assertTrue(dialog.move.isEnabled())
@@ -264,6 +285,7 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(source.exists())
         self.assertFalse((first/source.name).exists())
         self.assertEqual((second/source.name).read_bytes(),body)
+        self.assertTrue(txt.exists())
         self.assertTrue(tab.summary['ivs_transfer_requires_recalculation'])
         self.assertFalse(dialog.move.isEnabled())
         self.action(dialog, 'reject')
