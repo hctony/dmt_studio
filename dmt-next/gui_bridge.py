@@ -39,6 +39,7 @@ class Controller(C.QObject):
         self.last_gathering_config = None
         from workflow_bridge import WorkflowBridge
         self.action_depth = 0
+        self.running_controls = set()
         self.workflow = WorkflowBridge(self, self.input_path.parent)
         from model_profiles import ModelProfiles
         self.model_profiles = ModelProfiles(self)
@@ -328,10 +329,18 @@ class Controller(C.QObject):
             elif method=='gui.import-models': result=self.model_profiles.import_data(a['data'])
             elif method=='gui.apply-model': result=self.model_profiles.apply(a['model'], a.get('gathering', False))
             elif method=='gui.action':
-                w=self.widgets.get(str(a['id']))
-                if w is None or not shiboken6.isValid(w): raise ValueError('Control no longer exists')
-                if not w.isEnabled(): raise ValueError('Control is disabled')
+                control_id = str(a['id'])
+                w = self.widgets.get(control_id)
                 action=a['action'];v=a.get('value')
+                if w is None or not shiboken6.isValid(w) or not w.isVisible():
+                    self.skip_control(request, 'control-stale')
+                    return
+                if not w.isEnabled():
+                    self.skip_control(request, 'control-disabled', w)
+                    return
+                if action == 'click' and control_id in self.running_controls:
+                    self.skip_control(request, 'control-running', w)
+                    return
                 if os.environ.get('DMT_REMOTE_SESSION') == '1':
                     in_dialog = any(isinstance(parent, W.QDialog) for parent in self._parents(w))
                     if self.busy() and not in_dialog and action in ('input', 'text', 'edit-select', 'select', 'date', 'check', 'click'):
@@ -351,8 +360,10 @@ class Controller(C.QObject):
                 if action=='click' and isinstance(w,W.QAbstractButton):
                     started=time.monotonic();tab=self.window.centralWidget().currentIndex()
                     self.action_depth+=1
+                    self.running_controls.add(control_id)
                     try: w.click()
                     finally:
+                        self.running_controls.discard(control_id)
                         self.action_depth-=1
                         self.workflow.action(tab,w.text(),action,started)
                 elif action=='input' and isinstance(w,W.QLineEdit): w.setText(str(v));w.editingFinished.emit()
@@ -395,6 +406,15 @@ class Controller(C.QObject):
         except Exception as exc:
             self.workflow.history.record('bridge_error',error=self.workflow.history.clean(exc))
             self.emit({'id':request.get('id'),'error':str(exc)})
+
+    def skip_control(self, request, reason, widget=None):
+        action = request['args'].get('action', '')
+        label = widget.text() if isinstance(widget, W.QAbstractButton) else ''
+        self.workflow.history.record('gui_action_skipped', reason=reason,
+                                     tab=self.window.centralWidget().currentIndex(),
+                                     action=action, control=label)
+        self.emit({'id':request.get('id'), 'result':{'applied':False, 'reason':reason}})
+        self.publish()
 
     @staticmethod
     def _parents(widget):

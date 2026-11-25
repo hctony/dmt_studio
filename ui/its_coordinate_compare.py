@@ -8,7 +8,8 @@ from PySide6.QtWidgets import QDialog, QGroupBox, QHBoxLayout, QInputDialog, QLa
 
 from core.gather import format_xy_coords, parse_xy_from_gather_line
 from core.i18n import _
-from core.ivs_result_transfer import configured_roots, inspect_transfer, move_transfer, snapshot_hashes, source_candidates
+from core.ivs_result_transfer import configured_roots, inspect_transfer, move_transfer, snapshot_hashes, source_candidates, vrs_result_root
+from core.vrs_mismatch_export import prepare_correction, save_correction
 from ui.worker_lifetime import start_worker
 
 
@@ -16,10 +17,10 @@ class TransferWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, operation, detail):
+    def __init__(self, operation, detail, stage):
         super().__init__()
         self.operation = operation
-        self.dmt_progress = {'stage': _('IVS 결과 TXT 이동'), 'detail': detail, 'value': 0, 'max': 0}
+        self.dmt_progress = {'stage': _(stage), 'detail': detail, 'value': 0, 'max': 0}
 
     def run(self):
         try:
@@ -61,10 +62,13 @@ class ItsCoordinateCompare(QDialog):
         close.clicked.connect(self.reject)
         self.move = QPushButton(_('IVS 원본 TXT를 VRS로 이동'))
         self.move.clicked.connect(self.choose_transfer)
+        self.export_mismatches = QPushButton(_('전체 불일치 TXT → VRS 1호기'))
+        self.export_mismatches.clicked.connect(self.choose_correction)
         for control in (self.previous, self.next, self.position):
             controls.addWidget(control)
         controls.addStretch()
         controls.addWidget(self.move)
+        controls.addWidget(self.export_mismatches)
         controls.addWidget(close)
         layout.addLayout(controls)
 
@@ -114,8 +118,12 @@ class ItsCoordinateCompare(QDialog):
         self.previous.setEnabled(not self.transfer_pending and self.index > 0)
         self.next.setEnabled(not self.transfer_pending and self.index + 1 < len(self.rows))
         ivs = info.get('processes', {}).get('IVS', {})
-        self.move.setEnabled(not self.transfer_pending and bool(row.get('ivs_txt_only'))
+        self.move.setEnabled(not self.transfer_pending and not self.summary.get('vrs_correction_output')
+                             and bool(row.get('ivs_txt_only'))
                              and bool(self.transfer_source_values(ivs)))
+        self.export_mismatches.setEnabled(not self.transfer_pending and bool(self.trace.get('ski_path'))
+                                          and not self.summary.get('vrs_correction_output')
+                                          and not self.summary.get('ivs_transfer_requires_recalculation'))
 
         ski_lines = ['SKI: ' + self.trace.get('ski_path', ''), '',
                      *self.coordinate_lines(_('최종 SKI 좌표'), ski), '',
@@ -171,7 +179,7 @@ class ItsCoordinateCompare(QDialog):
             source = next((path for path in sources if str(path) == choice), None)
             if source is None:
                 return
-        stations = {f'VRS #{number} · {path}': path for number, path in enumerate(roots['VRS'], 1)}
+        stations = {f'VRS #{number} · {vrs_result_root(path)}': path for number, path in enumerate(roots['VRS'], 1)}
         choice, ok = QInputDialog.getItem(self, _('이동할 VRS 호기 선택'), strip, list(stations), 0, False)
         if not ok or choice not in stations:
             return
@@ -179,14 +187,14 @@ class ItsCoordinateCompare(QDialog):
         hashes = snapshot_hashes(ivs.get('selected_origins', []))
         self.transfer_context = (strip, coords, hashes)
         self.start_transfer(partial(inspect_transfer, source, stations[choice], roots, self.lot, strip, coords, hashes),
-                            self.confirm_transfer)
+                            self.confirm_transfer, self.transfer_failed, strip, 'IVS 결과 TXT 이동')
 
-    def start_transfer(self, operation, completed):
+    def start_transfer(self, operation, completed, failed, detail, stage):
         self.transfer_pending = True
         self.refresh()
-        worker = TransferWorker(operation, self.transfer_context[0])
+        worker = TransferWorker(operation, detail, stage)
         worker.completed.connect(completed)
-        worker.failed.connect(self.transfer_failed)
+        worker.failed.connect(failed)
         start_worker(self, worker)
 
     @Slot(object)
@@ -214,7 +222,8 @@ class ItsCoordinateCompare(QDialog):
             self.transfer_pending = False
             self.refresh()
             return
-        self.start_transfer(partial(self.execute_transfer, plan, strip, coords, hashes), self.transfer_completed)
+        self.start_transfer(partial(self.execute_transfer, plan, strip, coords, hashes),
+                            self.transfer_completed, self.transfer_failed, strip, 'IVS 결과 TXT 이동')
 
     def execute_transfer(self, plan, strip, coords, hashes):
         target = move_transfer(plan, configured_roots(self.model), self.lot, strip, coords, hashes)
@@ -238,6 +247,52 @@ class ItsCoordinateCompare(QDialog):
         self.transfer_pending = False
         self.refresh()
         QMessageBox.warning(self, _('IVS 결과 TXT 이동 실패'), error)
+
+    def choose_correction(self):
+        if not self.export_mismatches.isEnabled():
+            return
+        self.start_transfer(partial(prepare_correction, self.model, self.summary, self.rows),
+                            self.confirm_correction, self.correction_failed, self.lot, 'VRS 불일치 TXT 생성')
+
+    @Slot(object)
+    def confirm_correction(self, plan):
+        correction = plan.correction
+        lines = [
+            _('VRS 1호기에 작업자 999로 불일치 TXT 한 파일을 저장합니다.'), str(plan.destination), '',
+            f"Strip: {correction.strips}",
+            _('불일치 좌표') + f": {correction.corrected}",
+            _('기존 VRS 좌표 유지') + f": {correction.retained}",
+            _('공통 코드로 기록되는 좌표') + f": {correction.common}",
+        ]
+        if correction.missing:
+            lines.extend(['', _('원본 코드 또는 검사면을 확인하지 못해 제외하는 좌표') + f": {len(correction.missing)}"])
+            lines.extend(f"{strip} · X:{x:03d} Y:{y:03d}" for strip, x, y in correction.missing[:12])
+            if len(correction.missing) > 12:
+                lines.append('…')
+        answer = QMessageBox.question(self, _('VRS 불일치 TXT 저장 확인'), '\n'.join(lines),
+                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            self.transfer_pending = False
+            self.refresh()
+            return
+        self.start_transfer(partial(save_correction, self.model, self.summary, plan),
+                            self.correction_completed, self.correction_failed, self.lot, 'VRS 불일치 TXT 생성')
+
+    @Slot(object)
+    def correction_completed(self, path):
+        self.summary['vrs_correction_output'] = str(path)
+        from core.report_review import prepare_summary
+        prepare_summary(self.summary)
+        self.transfer_pending = False
+        self.refresh()
+        QMessageBox.information(self, _('VRS 불일치 TXT 저장 완료'), str(path) + '\n\n' +
+                                _('ITS 게더링에서 반영한 뒤 최신 SKI와 공정 TXT를 다시 불러오세요.'))
+
+    @Slot(str)
+    def correction_failed(self, error):
+        self.transfer_pending = False
+        self.refresh()
+        QMessageBox.warning(self, _('VRS 불일치 TXT 저장 실패'), error)
 
     def reject(self):
         if not self.transfer_pending:

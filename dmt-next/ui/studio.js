@@ -1,6 +1,7 @@
 const $=id=>document.getElementById(id);
 let lang=localStorage.getItem('language')==='zh-TW'?'zh-TW':'ko';
 let snapshot,dialogRequest=null,lastHash='',pending=0,imageViewer=null;
+const clickRequests=new Set();
 const dictionary=window.DMT_TRANSLATIONS||{};
 const connectionButton=document.createElement('button');connectionButton.id='connection';document.querySelector('footer').prepend(connectionButton);
 const phrases=Object.keys(dictionary).filter(k=>k.length>3).sort((a,b)=>b.length-a.length);
@@ -9,9 +10,31 @@ function tLiteral(value){const text=String(value??'');if(lang==='ko')return text
 const tr=(ko,zh)=>lang==='ko'?ko:zh;
 function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
 function error(e){$('alert').textContent=e?.message||String(e);}
-async function action(id,action,value,extra={}){pending++;status();try{await window.studio.action({id,action,value,...extra});}catch(e){error(e);}finally{pending--;status();}}
+function syncClick(id){for(const button of document.querySelectorAll(`button[data-control="${CSS.escape(id)}"]`)){button.disabled=button.dataset.enabled==='false'||clickRequests.has(id);}}
+async function refreshControlState(){
+ const before=snapshot;
+ const current=await window.studio.snapshot();
+ if(snapshot===before){snapshot=current;paint();}
+}
+async function action(id,action,value,extra={}){
+ const isClick=action==='click';
+ if(isClick&&clickRequests.has(id))return;
+ if(isClick){clickRequests.add(id);syncClick(id);}
+ pending++;status();
+ try{
+  const result=await window.studio.action({id,action,value,...extra});
+  if(result?.applied===false)await refreshControlState();
+ }catch(e){
+  if(/Control (?:is disabled|no longer exists)$/.test(e?.message||'')){
+   try{await refreshControlState();}catch(refreshError){error(refreshError);}
+  }else error(e);
+ }finally{
+  if(isClick){clickRequests.delete(id);syncClick(id);}
+  pending--;status();
+ }
+}
 function status(){$('activity').textContent=(pending||snapshot?.busy)?tr('처리 중…','處理中…'):tr('준비됨','就緒');}
-function bind(n,w){n.dataset.control=w.id;n.disabled=!w.enabled;return n;}
+function bind(n,w){n.dataset.control=w.id;n.dataset.enabled=String(w.enabled);n.disabled=!w.enabled||clickRequests.has(w.id);return n;}
 function pager(w,parent){if(w.total<=200)return;const p=el('div','pager');const prev=el('button','', '‹');prev.disabled=w.start===0;prev.onclick=()=>action(w.id,'page',w.start-200);const next=el('button','','›');next.disabled=w.start+200>=w.total;next.onclick=()=>action(w.id,'page',w.start+200);p.append(prev,el('span','',`${w.start+1}–${Math.min(w.start+200,w.total)} / ${w.total}`),next);parent.append(p);}
 function render(w){
  if(!w)return el('span');let n;
@@ -77,7 +100,7 @@ function renderProgress(){
  let host=$('task-progress');if(!host){host=el('section','group');host.id='task-progress';host.setAttribute('aria-label',tr('작업 진행 현황','工作進度'));$('content').before(host);}
  host.replaceChildren();const tasks=snapshot?.tasks||[];host.hidden=!tasks.length;
  const names={'IVS 수집 중지 중':['IVS 수집 중지 중','正在停止 IVS 收集'],'NAS 연결 중':['NAS 연결 중','正在連接 NAS'],'폴더 검색 중':['폴더 검색 중','正在搜尋資料夾'],'현재 Trial 진행률':['현재 Trial 진행률','目前 Trial 進度'],'작업 진행 중':['작업 진행 중','工作進行中']};
- for(const task of tasks){const label=task.stage==='IVS 결과 TXT 이동'?t(task.stage):tr(...(names[task.stage]||names['작업 진행 중']));const percent=task.max>0?Math.floor(task.value/task.max*100):null;
+ for(const task of tasks){const label=names[task.stage]?tr(...names[task.stage]):t(task.stage||'작업 진행 중');const percent=task.max>0?Math.floor(task.value/task.max*100):null;
  const text=label+(percent===null?'…':` · ${percent}% (${task.value}/${task.max})`)+tr(` · ${task.elapsed}초 경과`,` · 已經過 ${task.elapsed} 秒`);
  const bar=el('progress');bar.setAttribute('aria-label',label);if(task.max>0){bar.max=task.max;bar.value=task.value;}
  host.append(el('strong','',text),bar,el('p','',task.detail||tr('전체 수량을 확인하는 중입니다.','正在確認總數量。')));

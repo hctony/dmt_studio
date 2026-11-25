@@ -176,6 +176,11 @@ app.whenReady().then(async()=>{try{
  await compareVisible('TEST-,TEST-01,1,1,T,SM03');
  await compareBrowser("document.querySelector('.its-compare-next').click()");
  await compareVisible('TEST-,TEST-02,3,1,T,OT07');
+ const disabledNext=await compareBrowser("document.querySelector('.its-compare-next[disabled]')?.dataset.control");
+ assert(disabledNext);
+ assert.deepEqual(await rpc(0,'gui.action',{id:disabledNext,action:'click'}),{applied:false,reason:'control-disabled'});
+ await compareBrowser(`action(${JSON.stringify(disabledNext)},'click')`);
+ assert(!await compareBrowser("document.getElementById('alert').textContent.includes('Control is disabled')"));
  await compareBrowser("document.querySelector('.its-coordinate-compare').closest('.modal').querySelector('.modal-head button').click()");
  // An already open B browser should recover after A restarts with the same
  // port and key. A reload clears stale widget IDs and old dialog events.

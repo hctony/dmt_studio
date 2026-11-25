@@ -52,6 +52,32 @@ class GuiTests(unittest.TestCase):
             total+=sum(w['type']=='button' for w in nodes)
             self.assertEqual(s['root']['index'],i)
         self.assertGreater(total,45)
+
+    def test_stale_disabled_and_reentrant_clicks_refresh_without_running_twice(self):
+        tab = self.tab(6)
+        button = tab.btn_its_coordinates
+        control_id = self.c.register(button)
+        clicks = []
+        button.clicked.disconnect(tab.show_its_coordinates)
+        def send(request_id):
+            self.c.handle({'id':request_id, 'method':'gui.action', 'args':{'id':control_id,'action':'click'}})
+        def clicked():
+            clicks.append(True)
+            send(702)
+        button.clicked.connect(clicked)
+        with patch.object(self.c.workflow.history,'record') as record:
+            button.setEnabled(False)
+            send(700)
+            button.setEnabled(True)
+            send(701)
+            self.tab(0)
+            send(703)
+        replies = {event['id']:event.get('result') for event in self.events if event.get('id') in range(700,704)}
+        self.assertEqual(replies,{700:{'applied':False,'reason':'control-disabled'},701:True,
+                                  702:{'applied':False,'reason':'control-running'},703:{'applied':False,'reason':'control-stale'}})
+        self.assertEqual(clicks,[True])
+        self.assertEqual([call.kwargs['reason'] for call in record.call_args_list if call.args[0]=='gui_action_skipped'],
+                         ['control-disabled','control-running','control-stale'])
     def test_operator_history_tab_search_selection_and_original_download(self):
         import hashlib
         from core.inspection_history import record_file
@@ -67,6 +93,51 @@ class GuiTests(unittest.TestCase):
             self.assertTrue(self.c.widget(tab.detail)['literal'])
             output=self.root/'download.txt';self.answers['save']=str(output)
             self.action(tab.btn_export,'click');self.assertEqual(output.read_bytes(),body)
+
+    def test_mismatch_dialog_requires_confirmation_to_publish_all_strips_as_one_vrs_file(self):
+        txt, _ids = self.fixture()
+        txt.write_text(txt.read_text()+'1,RX1234-,RX1234-02\nRX1234-,RX1234-02,3,1,B,EN02\nRX1234-,RX1234-02,EOS\n')
+        ski = self.root / 'final.ski'
+        ski.write_text('RX1234-01,2,1\nRX1234-02,2,1\n')
+        backup = self.root / 'BDM_KINSUS' / 'BDM_Backup'
+        backup.mkdir(parents=True)
+        tab = self.tab(6)
+        tab.model_in.setText('MODEL-1')
+        for name in ('txt_in', 'fvi_txt_in', 'ivs_txt_in', 'ivs_json_in', 'strip_json_in', 'skipdata_in'):
+            getattr(tab, name).clear()
+        tab.vrs_txt_in.setText(str(txt))
+        tab.ski_in.setText(str(ski))
+        tab.units_per_strip_in.setText('4')
+        tab.xout_limit_in.setText('3')
+        tab.chk_excel_vrs.setChecked(True)
+        with patch.dict(os.environ, {'DMT_CACHE_DIR':str(self.root/'cache')}):
+            self.action(tab.btn_calc, 'click')
+        self.action(tab.btn_its_coordinates, 'click')
+        dialog = tab.its_coordinates_dialog
+        self.assertTrue(dialog.export_mismatches.isEnabled())
+        def wait():
+            end = time.monotonic()+5
+            while dialog.transfer_pending and time.monotonic()<end:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.assertFalse(dialog.transfer_pending)
+        with patch('core.vrs_mismatch_export.configured_roots',return_value={'VRS':[backup]}):
+            self.answers['message'] = W.QMessageBox.No.value
+            self.action(dialog.export_mismatches, 'click')
+            wait()
+            self.assertEqual(list(backup.parent.glob('*.txt')),[])
+            self.answers['message'] = W.QMessageBox.Yes.value
+            self.action(dialog.export_mismatches, 'click')
+            wait()
+        path, = backup.parent.glob('*.txt')
+        self.assertIn('_999_', path.name)
+        raw = path.read_bytes()
+        self.assertIn(b'RX1234-,RX1234-01,1,1,T,SM03',raw)
+        self.assertIn(b'RX1234-,RX1234-02,3,1,B,EN02',raw)
+        self.assertTrue(raw.endswith(b'RX1234-,EOL\r\n'))
+        self.assertEqual(tab.summary['vrs_correction_output'],str(path))
+        self.assertFalse(dialog.export_mismatches.isEnabled())
+        self.action(dialog, 'reject')
 
     def test_yield_original_calculation_and_excel_export(self):
         txt,ids=self.fixture();tab=self.tab(6)

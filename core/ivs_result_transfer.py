@@ -99,6 +99,33 @@ def _remote_allowed(path):
             raise PermissionError(_('A PC에서 허용한 데이터 폴더를 선택하세요.'))
 
 
+def vrs_result_root(configured):
+    parent_name = configured.parent.name or configured.parent.drive.rsplit('\\', 1)[-1]
+    if configured.name.casefold() == 'bdm_backup' and parent_name.casefold() == 'bdm_kinsus':
+        return configured.parent
+    return configured
+
+
+def resolve_vrs_result_folder(station, roots):
+    configured = next((root for root in roots['VRS'] if station in (root, vrs_result_root(root))), None)
+    if configured is None:
+        raise PermissionError(_('게더링 호기 경로를 확인하세요.'))
+    folder = vrs_result_root(configured)
+    _remote_allowed(folder)
+    actual = folder.resolve(strict=True)
+    is_junction = getattr(folder, 'is_junction', lambda: False)
+    if not actual.is_dir() or folder.is_symlink() or is_junction():
+        raise NotADirectoryError(str(folder))
+    return folder, actual
+
+
+def publish_without_overwrite(temporary, target):
+    if os.name == 'nt':
+        temporary.rename(target)
+    else:
+        os.link(temporary, target)
+
+
 def _fingerprint(path):
     stat = path.stat()
     return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
@@ -151,13 +178,10 @@ def _load_source(source, roots, lot, strip_id, hashes):
 
 
 def inspect_transfer(source, station, roots, lot, strip_id, coords, hashes=()):
-    if source not in source_candidates([source], roots['IVS']) or station not in roots['VRS']:
+    if source not in source_candidates([source], roots['IVS']):
         raise PermissionError(_('게더링 호기 경로를 확인하세요.'))
     _remote_allowed(source)
-    _remote_allowed(station)
-    actual_station = station.resolve(strict=True)
-    if not station.is_dir() or station.is_symlink():
-        raise NotADirectoryError(str(station))
+    station, actual_station = resolve_vrs_result_folder(station, roots)
     # Use resolved paths for the write and reject changes to the named roots before execution.
     target = actual_station / source.name
     if os.path.lexists(target):
@@ -195,10 +219,7 @@ def move_transfer(plan, roots, lot, strip_id, coords, hashes=()):
             shutil.copystat(source, temporary)
         if (source is not None and _fingerprint(source) != plan.version) or _digest(temporary) != plan.digest:
             raise ValueError(_('IVS 원본 TXT가 변경되었습니다. 다시 확인하세요.'))
-        if os.name == 'nt':
-            temporary.rename(target)  # Windows rename refuses to overwrite.
-        else:
-            os.link(temporary, target)  # Atomic no-overwrite publish on the destination filesystem.
+        publish_without_overwrite(temporary, target)
         published = True
         published_version = _fingerprint(target)
         if source is not None:

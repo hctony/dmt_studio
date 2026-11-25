@@ -42,6 +42,19 @@ class IvsResultTransferTests(unittest.TestCase):
         self.assertEqual(self.destination.read_bytes(), body)
         self.assertEqual(self.destination.stat().st_mtime_ns, mtime)
 
+    def test_move_uses_bdm_kinsus_directly_for_a_configured_vrs_backup_path(self):
+        folder = self.vrs / 'BDM_KINSUS'
+        backup = folder / 'BDM_Backup'
+        backup.mkdir(parents=True)
+        self.roots['VRS'] = [backup]
+        before = self.source.read_bytes()
+        plan = inspect_transfer(self.source, backup, self.roots, 'RX1-', 'RX1-01', self.coords)
+        self.assertEqual(plan.destination, folder / self.source.name)
+        destination = self.move(plan)
+        self.assertEqual(destination.read_bytes(), before)
+        self.assertFalse(self.source.exists())
+        self.assertEqual(list(backup.iterdir()), [])
+
     def test_existing_destination_and_changed_source_keep_original(self):
         plan = self.inspect()
         self.destination.write_bytes(b'existing data')
