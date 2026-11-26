@@ -53,6 +53,54 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(s['root']['index'],i)
         self.assertGreater(total,45)
 
+    def test_background_image_lookup_leaves_other_tabs_usable_and_cancels(self):
+        from threading import Event
+        from types import SimpleNamespace
+
+        from core import xml_followup
+        from core.cancellation import check_cancelled
+
+        entered, released = Event(), Event()
+        ssh = SimpleNamespace(close=released.set)
+        sftp = SimpleNamespace(close=lambda: None)
+
+        def connect(*, on_client):
+            on_client(ssh)
+            return ssh, sftp
+
+        def lookup(sftp, model, lot, baseline, should_stop, progress):
+            entered.set()
+            released.wait(5)
+            check_cancelled(should_stop)
+            return [], {}
+
+        summary = {'lot_id': 'RX-IMAGES-', 'units_per_strip': 4, 'total_units': 4, 'xml_followup_inputs': {'IVS': {}},
+                   'xml_followup_evidence': {'RX-IMAGES-01': {'width': 2}}, 'report_trace': {
+                       'selected_strip_ids': ['RX-IMAGES-01'],
+                       'groups': [{'strip_id': 'RX-IMAGES-01', 'code': 'SM03', 'coords': [[1, 1]]}]}}
+        with patch.dict(os.environ, {'DMT_CACHE_DIR': str(self.root / 'cache')}), patch(
+                'core.nas.connect', side_effect=connect), patch('core.xml_image_lookup.lookup_images', side_effect=lookup):
+            history = self.tab(11)
+            identity = xml_followup.enqueue('MODEL', summary, ['SM03 25.0%'])
+            history.server = True
+            history.tick()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(self.c.snapshot()['busy'])
+                self.assertEqual(self.c.task_progress()[0]['stage'], '3% 이상 불량 이미지 조회')
+                self.action(self.c.window.centralWidget(), 'tab', 6)
+                self.action(self.tab(6).model_in, 'input', 'OTHER-MODEL')
+                self.assertEqual(self.tab(6).model_in.text(), 'OTHER-MODEL')
+                self.tab(11)
+                self.action(history.stop_lookup, 'click')
+                self.assertTrue(history.worker.wait(3000))
+                self.assertEqual(xml_followup.read_job(identity)['status'], 'pending_images')
+                self.assertFalse(self.c.busy())
+            finally:
+                history.stop_background()
+                released.set()
+                history.worker.wait(5000)
+
     def test_stale_disabled_and_reentrant_clicks_refresh_without_running_twice(self):
         tab = self.tab(6)
         button = tab.btn_its_coordinates

@@ -23,10 +23,12 @@ class NasAuthenticationError(RuntimeError):
     pass
 
 
-def connect() -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
+def connect(*, on_client=None) -> tuple[paramiko.SSHClient, paramiko.SFTPClient]:
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
+        if on_client is not None:
+            on_client(ssh)
         ssh.connect(NAS_HOST, port=NAS_PORT, username=NAS_USER, password=NAS_PASSWORD,
                     timeout=10, banner_timeout=10, auth_timeout=10, channel_timeout=15)
         ssh.get_transport().set_keepalive(15)

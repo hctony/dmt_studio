@@ -36,8 +36,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(LMDataTab(), "LM Data")
         tabs.addTab(TestTab(), _("테스트"))
         tabs.addTab(InspectionHistoryTab(), _("작업자 검사 이력"))
-        xml_history = XmlHistoryTab()
-        tabs.addTab(xml_history, _("후속 XML 검증 이력"))
+        self.xml_history = XmlHistoryTab()
+        tabs.addTab(self.xml_history, _("후속 XML 검증 이력"))
         
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("한국어", "ko")
@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
         
         self.setCentralWidget(tabs)
         tabs.currentChanged.connect(lambda index: tabs.widget(6).apply_workflow_inputs() if index == 6 else None)
-        tabs.currentChanged.connect(lambda index: xml_history.tick() if tabs.widget(index) is xml_history else None)
+        tabs.currentChanged.connect(lambda index: self.xml_history.tick() if tabs.widget(index) is self.xml_history else None)
         
     def change_language(self, index: int) -> None:
         lang_code = self.lang_combo.itemData(index)

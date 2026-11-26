@@ -1,9 +1,10 @@
 """Per-connection directory batching and a shared, version-checked XML cache.
 
-No NAS writes. Each scan gets fresh directory metadata; only XML bodies persist.
+No NAS writes. Fresh directory metadata validates cached XML and barcode prefixes.
 """
 from collections import OrderedDict
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import posixpath
 import sqlite3
 import time
 import zlib
+from xml.etree import ElementTree
 
 from config import DATA_DIR, NAS_HOST, NAS_PORT, NAS_ROOT, NAS_USER
 from core.cancellation import check_cancelled
@@ -21,6 +23,7 @@ class XmlStore:
         self.namespace=namespace or json.dumps([NAS_HOST,NAS_PORT,NAS_ROOT,NAS_USER])
         self.path=Path(directory or os.environ.get('DMT_CACHE_DIR',str(DATA_DIR/'cache')))/'nas-xml.sqlite'
         self.db=None;self.disabled=False;self.writes=0
+        self.barcode_writes = 0
 
     def connection(self):
         if self.disabled:return None
@@ -30,6 +33,7 @@ class XmlStore:
                 self.db=sqlite3.connect(self.path,timeout=.2)
                 self.db.execute('PRAGMA journal_mode=WAL')
                 self.db.execute('CREATE TABLE IF NOT EXISTS xml(key TEXT PRIMARY KEY, version TEXT, body BLOB, touched REAL)')
+                self.db.execute('CREATE TABLE IF NOT EXISTS barcodes(key TEXT PRIMARY KEY, version TEXT, value TEXT, touched REAL)')
             except (OSError,sqlite3.Error):
                 self.disabled=True;self.close()
         return self.db
@@ -65,6 +69,31 @@ class XmlStore:
             try:db.rollback()
             except sqlite3.Error:pass
 
+    def get_barcode(self, path, version):
+        db = self.connection() if version is not None else None
+        if db is not None:
+            try:
+                row = db.execute('SELECT value FROM barcodes WHERE key=? AND version=? AND touched>?',
+                                 (self.key(path), version, time.time() - 86400)).fetchone()
+                return row[0] if row else None
+            except sqlite3.Error:
+                pass
+        return None
+
+    def put_barcode(self, path, version, barcode):
+        db = self.connection() if version is not None and barcode else None
+        if db is None:
+            return
+        try:
+            with db:
+                db.execute('INSERT OR REPLACE INTO barcodes VALUES(?,?,?,?)',
+                           (self.key(path), version, barcode, time.time()))
+                self.barcode_writes += 1
+                if self.barcode_writes % 250 == 1:
+                    db.execute('DELETE FROM barcodes WHERE touched<=?', (time.time() - 86400,))
+        except sqlite3.Error:
+            pass
+
     def close(self):
         if self.db is not None:
             try:self.db.close()
@@ -82,6 +111,7 @@ class ScanSftp:
         self.started=time.monotonic()
         self.metrics={'directory_reads':0,'directory_hits':0,'stat_reads':0,'xml_reads':0,
                       'xml_cache_hits':0,'xml_bytes':0,'xml_read_seconds':0.,'xml_parse_seconds':0.,'prefetched_files':0}
+        self.metrics.update(barcode_reads=0, barcode_bytes=0, barcode_cache_hits=0)
 
     def __getattr__(self,name):return getattr(self.raw,name)
 
@@ -137,6 +167,34 @@ class ScanSftp:
         if version is not None and self.version(after)==version and len(body)==getattr(after,'st_size',-1):
             self.store.put(path,version,body)
         return body
+
+    def read_barcode_prefix(self, path, metadata=None):
+        """Identify a Strip with at most 16 KiB from an uncached XML."""
+        self.check()
+        path = posixpath.normpath(path)
+        version = self.version(metadata if metadata is not None else self.metadata(path))
+        barcode = self.store.get_barcode(path, version)
+        if barcode is not None:
+            self.metrics['barcode_cache_hits'] += 1
+            return barcode
+        body = self.store.get(path, version)
+        if body is None:
+            with self.raw.open(path, 'rb') as file:
+                body = file.read(16 * 1024)
+            self.metrics['barcode_reads'] += 1
+            self.metrics['barcode_bytes'] += len(body)
+        self.check()
+        prefix = body[:16 * 1024]
+        for stream in (io.BytesIO(prefix), io.StringIO(prefix.decode('cp949', errors='replace'))):
+            try:
+                for _, element in ElementTree.iterparse(stream, events=('start',)):
+                    barcode = element.attrib.get('barcode', '').strip().upper()
+                    if barcode and barcode != 'UNKNOWN':
+                        self.store.put_barcode(path, version, barcode)
+                        return barcode
+            except (ElementTree.ParseError, ValueError, LookupError):
+                continue
+        return None
 
     def resolve_image(self,path):
         parent,name=posixpath.split(path)

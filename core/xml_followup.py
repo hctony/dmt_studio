@@ -1,4 +1,4 @@
-"""A PC's durable queue and frozen TXT-to-XML verification evidence."""
+"""A PC's shared image lookup queue and historical verification results."""
 from contextlib import closing
 from dataclasses import replace
 import json
@@ -8,6 +8,9 @@ import uuid
 
 from core.report_codes import excel_code
 from core.utils import unit_idx_to_xy
+
+
+IMAGE_JOB = 'image-lookup-v1'
 
 
 def connect():
@@ -25,6 +28,9 @@ def connect():
 
 def enqueue(model, summary, high_codes):
     lot = str(summary['lot_id']).strip()
+    high = {entry.split()[0] for entry in high_codes if entry}
+    if not high:
+        return None
     if not model or not lot or not summary['xml_followup_inputs']:
         raise ValueError('XML_FOLLOWUP_MISSING_MODEL_LOT_OR_TXT')
     trace = summary['report_trace']
@@ -33,7 +39,6 @@ def enqueue(model, summary, high_codes):
     evidence = summary['xml_followup_evidence']
     if grid and grid[0] * grid[1] == summary['units_per_strip']:
         evidence = {strip: {**row, 'width': grid[0]} for strip, row in evidence.items()}
-    high = {entry.split()[0] for entry in high_codes if entry}
     assignments = {}
     for group in trace['groups']:
         code = excel_code(group['code'])
@@ -42,38 +47,94 @@ def enqueue(model, summary, high_codes):
                 [x, y, code] for x, y in group['coords'])
     scope = dict(summary.get('rework_scope') or {})
     if scope.get('reuse_xml'):
-        # The established XML population remains the baseline in this mode.
-        # Read it from NAS here because the server does not own private session JSONs.
+        # A TXT-only recheck keeps the original inspection XML eligible.
         scope = {}
     baseline = {'units': summary['units_per_strip'], 'strips': trace['selected_strip_ids'],
-                'processes': summary['xml_followup_inputs'], 'evidence': evidence,
-                'scope': scope, 'high': sorted(high), 'image_assignments': assignments,
+                'evidence': evidence, 'scope': scope, 'high': sorted(high), 'image_assignments': assignments,
                 'total_units': summary['total_units']}
+    baseline = image_baseline(baseline)
+    if not baseline['image_assignments']:
+        return None
+    text = json.dumps(baseline, sort_keys=True)
     now = time.time()
     identity = uuid.uuid4().hex
     with closing(connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute('SELECT id FROM jobs WHERE model=? AND lot=? AND baseline=? ORDER BY created DESC LIMIT 1',
+                              (model, lot, text)).fetchone()
+        if existing:
+            return existing['id']
         db.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)',
-                   (identity, model, lot, now, now, 'queued', json.dumps(baseline), '{}', ''))
+                   (identity, model, lot, now, now, 'queued', text, '{}', ''))
     return identity
+
+
+def image_baseline(baseline):
+    high = set(baseline.get('high', []))
+    evidence = baseline.get('evidence', {})
+    assignments = {}
+    for strip, rows in baseline.get('image_assignments', {}).items():
+        matches = sorted({(x, y, code) for x, y, code in rows if code in high})
+        if matches and strip in evidence and evidence[strip].get('width'):
+            assignments[strip] = matches
+    return {
+        'kind': IMAGE_JOB,
+        'strip_count': baseline.get('strip_count', len(baseline.get('strips', []))),
+        'total_units': baseline.get('total_units', 0),
+        'scope': baseline.get('scope', {}),
+        'high': sorted(high),
+        'image_assignments': assignments,
+        'evidence': {strip: {'width': evidence[strip]['width']} for strip in assignments},
+    }
 
 
 def recover():
     with closing(connect()) as db, db:
-        db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+        db.execute('BEGIN IMMEDIATE')
+        for row in db.execute("SELECT id,status,baseline FROM jobs WHERE status IN ('queued','running','cancelling')").fetchall():
+            baseline = json.loads(row['baseline'])
+            if baseline.get('kind') != IMAGE_JOB:
+                baseline = image_baseline(baseline)
+                status = 'pending_images' if baseline['image_assignments'] else 'images_skipped'
+                db.execute('UPDATE jobs SET status=?, updated=?, baseline=? WHERE id=?',
+                           (status, time.time(), json.dumps(baseline, sort_keys=True), row['id']))
+            elif row['status'] != 'queued':
+                db.execute("UPDATE jobs SET status='pending_images', updated=? WHERE id=?",
+                           (time.time(), row['id']))
+
+
+def request_images(identity):
+    with closing(connect()) as db, db:
+        db.execute("""UPDATE jobs SET status='queued', updated=?, details='{}' WHERE id=?
+                      AND status IN ('pending_images','images_missing','images_failed')""", (time.time(), identity))
+
+
+def cancel_images(identity):
+    with closing(connect()) as db, db:
+        db.execute("""UPDATE jobs SET status=CASE WHEN status='running' THEN 'cancelling' ELSE 'pending_images' END,
+                      updated=? WHERE id=? AND status IN ('queued','running')""", (time.time(), identity))
+
+
+def is_cancelling(identity):
+    with closing(connect()) as db:
+        row = db.execute('SELECT status FROM jobs WHERE id=?', (identity,)).fetchone()
+        return bool(row and row['status'] == 'cancelling')
 
 
 def claim():
     with closing(connect()) as db, db:
         row = db.execute('''UPDATE jobs SET status='running', updated=? WHERE id=(
             SELECT id FROM jobs WHERE status='queued' ORDER BY created,id LIMIT 1)
-            AND NOT EXISTS(SELECT 1 FROM jobs WHERE status='running')
+            AND NOT EXISTS(SELECT 1 FROM jobs WHERE status IN ('running','cancelling'))
             RETURNING id, model, lot, baseline''', (time.time(),)).fetchone()
         return dict(row) if row else None
 
 
 def finish(identity, status, details, xml=None):
     with closing(connect()) as db, db:
-        db.execute('UPDATE jobs SET status=?, updated=?, details=?, xml=? WHERE id=?',
+        db.execute("""UPDATE jobs SET status=CASE WHEN status='cancelling' THEN 'pending_images' ELSE ? END,
+                      updated=?, details=CASE WHEN status='cancelling' THEN '{}' ELSE ? END,
+                      xml=CASE WHEN status='cancelling' THEN '' ELSE ? END WHERE id=?""",
                    (status, time.time(), json.dumps(details, ensure_ascii=False),
                     json.dumps(xml, ensure_ascii=False) if xml else '', identity))
 

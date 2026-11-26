@@ -113,6 +113,61 @@ class NasPerformanceTests(unittest.TestCase):
         warm=ScanSftp(LocalSftp(self.root),XmlStore('parallel',self.root/'parallel-cache'));self.addCleanup(warm.close)
         self.assertEqual(read_barcode_from_xml('/trial/1/one_ivs.xml',warm),'RX-01');self.assertEqual(warm.raw.reads,0)
 
+    def test_image_lookup_reads_only_latest_target_xml_in_full(self):
+        from core.xml_image_lookup import lookup_images
+
+        latest = TrialContext('B', 'M', 'RX-', '6', '/latest')
+        for name, barcode, stamp, idx, code in (
+            ('3/front_ivs.xml', 'RX-01', 1000000040, 0, '9998'),
+            ('3/back_ivs.xml', 'RX-01', 1000000020, 1, 'OT06'),
+            ('4/unrelated_ivs.xml', 'RX-02', 1000000050, 0, 'SM03'),
+        ):
+            file = self.root / 'latest' / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(f'<Root barcode="{barcode}"><Unit><P0 unit_idx="{idx}" ivs_1="{code}"/>'
+                            '<P1 unit_idx="3" ivs_1="SM03"/></Unit>' + ' ' * 20000 + '</Root>')
+            os.utime(file, (stamp, stamp))
+        baseline = {'scope': {}, 'high': ['OT06'], 'evidence': {'RX-01': {'width': 4}},
+                    'image_assignments': {'RX-01': [[1, 1, 'OT06'], [2, 1, 'OT06']]}}
+        with patch('core.xml_image_lookup.list_lot_trials', return_value=[self.ctx, latest]), patch(
+                'core.xml_image_lookup.load_valid_bundle_indexes', return_value={1, 3, 4}):
+            cold = self.session()
+            with patch.object(cold.raw, 'open', wraps=cold.raw.open) as opened:
+                records, details = lookup_images(cold, 'M', 'RX-', baseline, lambda: False, lambda *_: None)
+            self.assertEqual({record['source_xml'] for record in records},
+                             {'/latest/3/front_ivs.xml', '/latest/3/back_ivs.xml'})
+            self.assertEqual([record['ivs_1'] for record in records], ['OT06', 'OT06'])
+            self.assertEqual(details['image_counts'], {'OT06': 2})
+            self.assertEqual(details['scan_metrics']['xml_reads'], 2)
+            self.assertEqual(details['scan_metrics']['barcode_bytes'], 3 * 16 * 1024)
+            self.assertEqual({call.args[0] for call in opened.call_args_list},
+                             {'/latest/3/front_ivs.xml', '/latest/3/back_ivs.xml', '/latest/4/unrelated_ivs.xml'})
+            cold.close()
+
+            warm = self.session()
+            again, details = lookup_images(warm, 'M', 'RX-', baseline, lambda: False, lambda *_: None)
+            self.assertEqual(again, records)
+            self.assertEqual(warm.raw.reads, 0)
+            self.assertEqual(details['scan_metrics']['barcode_cache_hits'], 3)
+
+    def test_newer_fc_only_strip_does_not_use_old_defect_images(self):
+        from core.xml_image_lookup import lookup_images
+
+        file = self.root / 'trial/2/2_fc.xml'
+        file.parent.mkdir()
+        file.write_text('<Root barcode="RX-01"/>', encoding='utf-16')
+        os.utime(file, (1000000040, 1000000040))
+        baseline = {'scope': {}, 'high': ['SM03'], 'evidence': {'RX-01': {'width': 4}},
+                    'image_assignments': {'RX-01': [[1, 1, 'SM03']]}}
+        sftp = self.session()
+        with patch('core.xml_image_lookup.list_lot_trials', return_value=[self.ctx]), patch(
+                'core.xml_image_lookup.load_valid_bundle_indexes', return_value={1, 2}):
+            records, details = lookup_images(sftp, 'M', 'RX-', baseline, lambda: False, lambda *_: None)
+        self.assertEqual(records, [])
+        self.assertEqual(details['image_unmatched_strips'], ['RX-01'])
+        self.assertEqual(details['scan_metrics']['xml_reads'], 0)
+        self.assertEqual(details['scan_metrics']['barcode_reads'], 1)
+
 
 class ImageCatalogTests(unittest.TestCase):
     def records(self):

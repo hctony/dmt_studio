@@ -140,8 +140,20 @@ class Controller(C.QObject):
             return True
         for owner in [self.window, *self.window.findChildren(W.QWidget)]:
             for value in [*vars(owner).values(), *getattr(owner, '_live_workers', ())]:
-                if isinstance(value,C.QThread) and shiboken6.isValid(value) and value.isRunning(): return True
+                if (isinstance(value, C.QThread) and shiboken6.isValid(value)
+                        and value.isRunning() and not getattr(value, 'dmt_background', False)):
+                    return True
         return bool(self.waiters)
+
+    @C.Slot()
+    def shutdown(self):
+        self.timer.stop()
+        worker = self.window.xml_history.stop_background()
+        if worker is not None:
+            worker.finished.connect(self.app.quit, C.Qt.QueuedConnection)
+            if worker.isRunning():
+                return
+        self.app.quit()
 
     def open_dialogs(self):
         return [widget for widget in self.app.topLevelWidgets()
@@ -443,6 +455,6 @@ def run():
         for line in sys.stdin:
             try: controller.incoming.emit(json.loads(line))
             except Exception as exc: emit({'error':str(exc)})
-        C.QMetaObject.invokeMethod(app,'quit',C.Qt.QueuedConnection)
+        C.QMetaObject.invokeMethod(controller, 'shutdown', C.Qt.QueuedConnection)
     threading.Thread(target=reader,daemon=True).start()
     controller.publish();app.exec();monitor.set()
