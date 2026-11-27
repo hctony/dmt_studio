@@ -3,9 +3,12 @@ from __future__ import annotations
 from core.i18n import _
 
 import traceback
+import json
 import threading
 import time
+from contextlib import suppress
 from dataclasses import asdict
+from itertools import chain
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,6 +23,8 @@ from core.nas import (
     list_lot_trials, parse_trial_context, find_fc_file, read_barcode_from_xml,
 )
 from core.ivs import parse_ivs_xml, records_to_json, find_ivs_files
+from core.image_catalog import ImageCatalog, image_key
+from core.report_codes import followup_code
 from core.utils import sanitize_filename
 from core.cancellation import OperationCancelled, check_cancelled
 
@@ -317,6 +322,24 @@ class ImageLoaderThread(QThread):
                 ssh.close()
 
 
+def label_image(image, label):
+    image = image.convertToFormat(QImage.Format_RGB32)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.TextAntialiasing)
+    font = QFont("Arial", max(14, image.width() // 45))
+    font.setBold(True)
+    painter.setFont(font)
+    text_rect = painter.fontMetrics().boundingRect(0, 0, image.width(), image.height(), Qt.TextWordWrap, label)
+    margin = 8
+    bg_rect = text_rect.adjusted(-margin, -margin, margin, margin)
+    bg_rect.moveTopLeft(bg_rect.topLeft())
+    painter.fillRect(bg_rect, QColor(0, 0, 0, 180))
+    painter.setPen(QColor(255, 255, 255))
+    painter.drawText(text_rect.adjusted(0, 0, margin, margin), Qt.TextWordWrap, label)
+    painter.end()
+    return image
+
+
 class DownloadThread(QThread):
     progress = Signal(str)
     finished = Signal(int)
@@ -332,21 +355,7 @@ class DownloadThread(QThread):
         image = QImage.fromData(data)
         if image.isNull():
             return data
-        image = image.convertToFormat(QImage.Format_RGB32)
-        painter = QPainter(image)
-        painter.setRenderHint(QPainter.TextAntialiasing)
-        font = QFont("Arial", max(14, image.width() // 45))
-        font.setBold(True)
-        painter.setFont(font)
-        metrics = painter.fontMetrics()
-        text_rect = metrics.boundingRect(0, 0, image.width(), image.height(), Qt.TextWordWrap, label)
-        margin = 8
-        bg_rect = text_rect.adjusted(-margin, -margin, margin, margin)
-        bg_rect.moveTopLeft(bg_rect.topLeft())
-        painter.fillRect(bg_rect, QColor(0, 0, 0, 180))
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(text_rect.adjusted(0, 0, margin, margin), Qt.TextWordWrap, label)
-        painter.end()
+        image = label_image(image, label)
         buffer = QByteArray()
         qbuffer = QBuffer(buffer)
         qbuffer.open(QIODevice.WriteOnly)
@@ -397,42 +406,74 @@ class DownloadThread(QThread):
                 ssh.close()
 
 
-class TopImageDownloadThread(QThread):
-    """Save up to the requested number of complete three-light PNGs per code."""
+class FollowupImageDownloadThread(QThread):
+    """Fill a request from cached candidates first, opening more NAS folders only as needed."""
 
-    finished = Signal(dict)
+    completed = Signal(dict, bool)
     failed = Signal(str)
+    dmt_background = True
 
-    def __init__(self, candidates, quantities, directory):
+    def __init__(self, candidates, quantities, directory, *, combined, job=None, baseline=None):
         super().__init__()
         self.candidates = candidates
-        self.quantities = quantities
+        self.quantities = {code: size for code, size in quantities.items() if size > 0 and followup_code(code)}
         self.directory = Path(directory)
+        self.combined = combined
+        self.job = job
+        self.baseline = baseline
+        self.cancel = threading.Event()
+        self.ssh = None
         self.run_id = uuid4().hex[:12]
-        self.dmt_progress = {'stage': _('TOP 3 불량 이미지 다운로드'), 'value': 0,
-                             'max': sum(quantities.values()), 'detail': ''}
+        title = 'TOP 3 불량 이미지 다운로드' if combined else '3% 이상 불량 이미지 다운로드'
+        self.dmt_progress = {'stage': _(title), 'value': 0, 'max': sum(self.quantities.values()), 'detail': ''}
 
-    def read_set(self, sftp, record):
-        paths = record.images
-        if len(paths) != 3 or len(set(paths)) != 3 or not all(paths):
-            return None
-        images = []
-        try:
-            if getattr(sftp, '_dmt_scan_session', False) is True:
-                paths = [sftp.resolve_image(path) for path in paths]
-                for path in paths:
+    def stop(self):
+        if self.cancel.is_set():
+            return
+        self.cancel.set()
+        self.dmt_progress = {**self.dmt_progress, 'stage': _('이미지 다운로드 중지 중')}
+        ssh = self.ssh
+        if ssh is not None:
+            def interrupt():
+                with suppress(Exception):
+                    ssh.close()
+            threading.Thread(target=interrupt, daemon=True).start()
+
+    def set_client(self, ssh):
+        self.ssh = ssh
+        check_cancelled(self.cancel.is_set)
+
+    def read_images(self, sftp, record):
+        paths = []
+        for number, path in enumerate(record.images[:3]):
+            if not path:
+                continue
+            check_cancelled(self.cancel.is_set)
+            try:
+                if getattr(sftp, '_dmt_scan_session', False) is True:
+                    path = sftp.resolve_image(path)
                     sftp.metadata(path)
-            for path in paths:
+                paths.append((number, path))
+            except (FileNotFoundError, PermissionError):
+                continue
+        if self.combined and len({path for _, path in paths}) != 3:
+            return []
+        images = []
+        for number, path in paths:
+            check_cancelled(self.cancel.is_set)
+            try:
                 with sftp.open(path, 'rb') as source:
                     image = QImage.fromData(source.read())
-                if image.isNull():
-                    return None
-                images.append(image)
-        except (FileNotFoundError, PermissionError):
-            return None
+                if not image.isNull():
+                    images.append((number, image))
+            except (FileNotFoundError, PermissionError):
+                continue
+        return images if not self.combined or len(images) == 3 else []
 
+    def compose(self, record, images):
         header_height = 44
-        combined = QImage(sum(image.width() for image in images), max(image.height() for image in images) + header_height,
+        combined = QImage(sum(image.width() for _, image in images),
+                          max(image.height() for _, image in images) + header_height,
                           QImage.Format_RGB32)
         if combined.isNull():
             raise OSError('IMAGE_COMPOSITION_FAILED')
@@ -444,46 +485,110 @@ class TopImageDownloadThread(QThread):
         painter.setPen(Qt.white)
         painter.drawText(6, 17, f'{record.lot} · {record.strip_id} · U{record.unit_idx} · {record.face} · {record.ivs_1}')
         left = 0
-        for number, image in enumerate(images):
+        for number, image in images:
             painter.drawText(left + 6, 38, f'LIGHT_{number}')
             painter.drawImage(left, header_height, image)
             left += image.width()
         painter.end()
         return combined
 
+    def save_images(self, record, images, index):
+        folder = self.directory / sanitize_filename(record.ivs_1)
+        folder.mkdir(parents=True, exist_ok=True)
+        name = sanitize_filename(f'{record.lot}_{record.strip_id}_U{record.unit_idx}_{record.face}_'
+                                 f'p{record.img_merge_idx}_{record.machine}_T{record.trial}_{record.strip_folder}_'
+                                 f'{self.run_id}_{index:04d}')
+        if self.combined:
+            outputs = [(name, self.compose(record, images))]
+        else:
+            outputs = [(f'{name}_LIGHT_{number}', label_image(image, (
+                f'LOT: {record.lot}\nStrip: {record.strip_id}\nUnit: {record.unit_idx}  '
+                f'Light: LIGHT_{number}\nCode: {record.ivs_1}  {record.machine} T{record.trial}')))
+                for number, image in images]
+        for filename, image in outputs:
+            output = folder / (filename + '.png')
+            staging = folder / ('.' + filename + '.tmp')
+            destination = QSaveFile(str(staging))
+            if not destination.open(QIODevice.WriteOnly):
+                raise OSError(destination.errorString())
+            if not image.save(destination, 'PNG'):
+                destination.cancelWriting()
+                raise OSError(destination.errorString())
+            if not destination.commit():
+                raise OSError(destination.errorString())
+            try:
+                staging.replace(output)
+            finally:
+                staging.unlink(missing_ok=True)
+
+    def progress(self, detail):
+        self.dmt_progress = {**self.dmt_progress, 'detail': detail}
+
+    def cached_records(self):
+        if not self.job or not self.job.get('xml'):
+            return chain.from_iterable(self.candidates.get(code, ()) for code in self.quantities)
+        from core import xml_followup
+        from core.ivs import load_records_from_payload
+
+        entry = xml_followup.read_job(self.job['id'], include_xml=True)
+        records = load_records_from_payload(json.loads(entry['xml'])) if entry and entry['xml'] else []
+        if self.baseline.get('kind') not in xml_followup.IMAGE_JOB_KINDS:
+            records = xml_followup.image_records(self.baseline, records)
+        catalog = ImageCatalog(record for record in records if record.ivs_1 in self.quantities)
+        return (group[0] for code in self.quantities for group in catalog.by_code.get(code, []))
+
     def run(self):
-        ssh = sftp = None
+        from core.xml_image_lookup import iter_image_samples
+
+        sftp = failure = None
         saved = dict.fromkeys(self.quantities, 0)
+        remaining = set(saved)
+        if not remaining:
+            self.completed.emit(saved, self.cancel.is_set())
+            return
+        used = set()
         try:
-            ssh, sftp = connect()
-            for code, amount in self.quantities.items():
-                folder = self.directory / sanitize_filename(code)
-                for record in self.candidates[code]:
-                    if saved[code] >= amount:
+            check_cancelled(self.cancel.is_set)
+            cached = self.cached_records()
+            check_cancelled(self.cancel.is_set)
+            _, sftp = connect(on_client=self.set_client)
+            if getattr(sftp, '_dmt_scan_session', False) is True:
+                sftp.should_stop = self.cancel.is_set
+            extra = iter_image_samples(sftp, self.job['model'], self.job['lot'], self.baseline,
+                                       remaining, self.cancel.is_set, self.progress) if self.job else ()
+            for record in chain(cached, extra):
+                check_cancelled(self.cancel.is_set)
+                code = record.ivs_1
+                if code not in remaining:
+                    continue
+                key = image_key(record)
+                if key in used:
+                    continue
+                used.add(key)
+                self.progress(f'{code} · {record.strip_id} · {record.machine}/{record.trial}')
+                images = self.read_images(sftp, record)
+                if not images:
+                    continue
+                check_cancelled(self.cancel.is_set)
+                self.save_images(record, images, saved[code] + 1)
+                saved[code] += 1
+                self.dmt_progress = {**self.dmt_progress, 'value': sum(saved.values())}
+                if saved[code] == self.quantities[code]:
+                    remaining.remove(code)
+                    if not remaining:
                         break
-                    self.dmt_progress = {**self.dmt_progress, 'value': sum(saved.values()),
-                                         'detail': f'{code} · {record.strip_id}'}
-                    image = self.read_set(sftp, record)
-                    if image is None:
-                        continue
-                    folder.mkdir(parents=True, exist_ok=True)
-                    name = sanitize_filename(
-                        f'{record.lot}_{record.strip_id}_U{record.unit_idx}_{record.face}_'
-                        f'p{record.img_merge_idx}_{self.run_id}_{saved[code]+1:04d}')
-                    destination = QSaveFile(str(folder / (name + '.png')))
-                    if not destination.open(QIODevice.WriteOnly):
-                        raise OSError(destination.errorString())
-                    if not image.save(destination, 'PNG'):
-                        destination.cancelWriting()
-                        raise OSError(destination.errorString())
-                    if not destination.commit():
-                        raise OSError(destination.errorString())
-                    saved[code] += 1
-            self.finished.emit(saved)
+        except OperationCancelled:
+            pass
         except Exception:
-            self.failed.emit(traceback.format_exc())
+            if not self.cancel.is_set():
+                failure = traceback.format_exc()
         finally:
-            if sftp:
-                sftp.close()
-            if ssh:
-                ssh.close()
+            for connection in (sftp, self.ssh):
+                if connection is not None:
+                    with suppress(Exception):
+                        connection.close()
+            self.ssh = None
+        if failure:
+            self.failed.emit(failure)
+        else:
+            self.completed.emit(saved, self.cancel.is_set())

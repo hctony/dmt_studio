@@ -53,7 +53,7 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(s['root']['index'],i)
         self.assertGreater(total,45)
 
-    def test_background_image_lookup_leaves_other_tabs_usable_and_cancels(self):
+    def test_background_image_download_leaves_other_tabs_usable_and_cancels(self):
         from threading import Event
         from types import SimpleNamespace
 
@@ -68,31 +68,39 @@ class GuiTests(unittest.TestCase):
             on_client(ssh)
             return ssh, sftp
 
-        def lookup(sftp, model, lot, baseline, should_stop, progress):
+        def lookup(sftp, model, lot, baseline, remaining, should_stop, progress):
             entered.set()
             released.wait(5)
             check_cancelled(should_stop)
-            return [], {}
+            return ()
 
         summary = {'lot_id': 'RX-IMAGES-', 'units_per_strip': 4, 'total_units': 4, 'xml_followup_inputs': {'IVS': {}},
                    'xml_followup_evidence': {'RX-IMAGES-01': {'width': 2}}, 'report_trace': {
                        'selected_strip_ids': ['RX-IMAGES-01'],
                        'groups': [{'strip_id': 'RX-IMAGES-01', 'code': 'SM03', 'coords': [[1, 1]]}]}}
         with patch.dict(os.environ, {'DMT_CACHE_DIR': str(self.root / 'cache')}), patch(
-                'core.nas.connect', side_effect=connect), patch('core.xml_image_lookup.lookup_images', side_effect=lookup):
+                'workers.ivs_workers.connect', side_effect=connect), patch(
+                'core.xml_image_lookup.iter_image_samples', side_effect=lookup):
             history = self.tab(11)
             identity = xml_followup.enqueue('MODEL', summary, ['SM03 25.0%'])
-            history.server = True
-            history.tick()
+            history.refresh()
+            self.assertFalse(entered.is_set())
+            self.action(history.high_download, 'click')
+            self.assertFalse(entered.is_set())
+            self.answers['directory'] = str(self.root / 'images')
+            dialog = history.range_dialog
+            submit = next(button for button in dialog.findChildren(W.QPushButton) if button.text() == '다운로드')
+            self.action(dialog.quantities['SM03'], 'input', '1')
+            self.action(submit, 'click')
             try:
                 self.assertTrue(entered.wait(2))
                 self.assertFalse(self.c.snapshot()['busy'])
-                self.assertEqual(self.c.task_progress()[0]['stage'], '3% 이상 불량 이미지 조회')
+                self.assertEqual(self.c.task_progress()[0]['stage'], '3% 이상 불량 이미지 다운로드')
                 self.action(self.c.window.centralWidget(), 'tab', 6)
                 self.action(self.tab(6).model_in, 'input', 'OTHER-MODEL')
                 self.assertEqual(self.tab(6).model_in.text(), 'OTHER-MODEL')
                 self.tab(11)
-                self.action(history.stop_lookup, 'click')
+                self.action(history.stop_download, 'click')
                 self.assertTrue(history.worker.wait(3000))
                 self.assertEqual(xml_followup.read_job(identity)['status'], 'pending_images')
                 self.assertFalse(self.c.busy())
@@ -102,9 +110,7 @@ class GuiTests(unittest.TestCase):
                 history.worker.wait(5000)
 
     def test_top_images_backfills_only_selected_lot_and_registers_new_low_rate_report(self):
-        from dataclasses import asdict
         from core import xml_followup, yield_handoff
-        from core.models import DefectRecord
 
         with patch.object(yield_handoff, 'DATA_DIR', self.root), patch.dict(os.environ, {
                 'DMT_CACHE_DIR': str(self.root / 'cache')}):
@@ -117,6 +123,12 @@ class GuiTests(unittest.TestCase):
                     'x_count': 22, 'y_count': 4, 'allowance': 18, 'ski_path': str(ski)}))
 
             tab = self.tab(6)
+            self.assertTrue(tab.btn_download_top_images.isVisible())
+            self.assertTrue(tab.btn_download_high_images.isVisible())
+            history = self.tab(11)
+            self.assertTrue(history.top_download.isVisible())
+            self.assertTrue(history.high_download.isVisible())
+            self.tab(6)
             self.answers['item'] = 'MODEL / OLDER-'
             self.action(tab.btn_previous_lot, 'click')
             self.assertIn('OLDER-', tab.handoff_status.text())
@@ -137,30 +149,33 @@ class GuiTests(unittest.TestCase):
             self.assertEqual([row['lot'] for row in entries], ['NEWEST-', 'OLDER-'])
             self.assertTrue(all(row['kind'] == xml_followup.TOP_IMAGE_JOB for row in entries))
             self.assertIsNone(xml_followup.claim())
-            history = self.tab(11)
-            self.assertEqual(history.lookup.text(), 'TOP 3 불량 이미지 조회')
-            self.assertTrue(history.lookup.isEnabled())
-            self.assertFalse(history.download.isEnabled())
             identity = entries[0]['id']
-            self.action(history.lookup, 'click')
-            self.assertEqual(xml_followup.claim()['id'], identity)
-            record = DefectRecord('NEWEST-01', 'A', 'MODEL', 'NEWEST-', 'T', '1', 'Unit', 'FC', '0', '0',
-                                  'SM03', 'SM03', '', 'F', 0, 0, 0, 0, 'data.xml', ['/a', '/b', '/c'])
-            xml_followup.finish(identity, 'images_ready', {'image_counts': {'SM03': 1}},
-                                {'schema': 'dmt-studio-ivs-v1', 'records': [asdict(record)]})
-            history.refresh()
-            self.action(history.download, 'click')
+            self.action(tab.btn_download_top_images, 'click')
+            self.assertIs(self.c.window.centralWidget().currentWidget(), history)
+            self.assertEqual(history.selection_id(), identity)
+            self.assertTrue(history.top_download.isVisible())
+            self.assertTrue(history.high_download.isVisible())
+            self.assertIsNone(history.worker)
             dialog = history.range_dialog
             self.assertEqual(dialog.windowTitle(), 'TOP 3 불량 이미지 다운로드')
-            self.assertEqual(dialog.quantities['SM03'].text(), '1')
+            self.assertEqual(dialog.quantities['SM03'].text(), '10')
             submit = next(button for button in dialog.findChildren(W.QPushButton) if button.text() == '다운로드')
-            with patch.object(history, 'save_top_images') as save:
-                self.action(dialog.quantities['SM03'], 'input', '2')
+            with patch.object(history, 'start_download') as save:
+                self.action(dialog.quantities['SM03'], 'input', '-1')
                 self.action(submit, 'click')
                 save.assert_not_called()
                 self.action(dialog.quantities['SM03'], 'input', '1')
                 self.action(submit, 'click')
-                self.assertEqual(save.call_args.args[1], {'SM03': 1})
+                self.assertEqual(save.call_args.args[2:], ({'SM03': 1}, True))
+            old = json.loads(xml_followup.read_job(identity)['baseline'])
+            old.update(kind=xml_followup.IMAGE_JOB, high=['OT06', 'SM03'])
+            high_id = xml_followup.store_job('MODEL', 'NEWEST-', old, 'pending_images')
+            history.refresh()
+            self.action(history.high_download, 'click')
+            self.assertEqual(history.selection_id(), high_id)
+            self.assertEqual(history.range_dialog.windowTitle(), '3% 이상 불량 이미지 다운로드')
+            self.assertEqual(list(history.range_dialog.quantities), ['SM03'])
+            history.range_dialog.reject()
 
     def test_stale_disabled_and_reentrant_clicks_refresh_without_running_twice(self):
         tab = self.tab(6)

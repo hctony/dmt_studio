@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import DEFAULT_MODEL
+from core import xml_followup
 from core.gather import load_latest_process_blocks, parse_gather_file
 from core.ivs import load_ivs_dummy_scrap_strips
 from core.skipdata import load_skipdata_folder
@@ -56,6 +57,8 @@ from ui.settings_helper import (
 
 
 class YieldTab(QWidget):
+    image_download_requested = Signal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self.summary: dict = {}
@@ -116,26 +119,39 @@ class YieldTab(QWidget):
             self.apply_workflow_inputs(force=True, entry=entries[choice])
 
     def register_current_top_images(self):
+        if self.prepare_image_job(xml_followup.TOP_IMAGE_JOB):
+            QMessageBox.information(self, _('TOP 3 이미지 등록'),
+                                    _('TOP 3 이미지는 후속 XML 검증 이력에서 조회할 수 있습니다.'))
+
+    def download_current_images(self, kind):
+        identity = self.prepare_image_job(kind)
+        if identity:
+            self.image_download_requested.emit(identity)
+
+    def prepare_image_job(self, kind):
+        from core.report_codes import high_rate_report_codes
         from core.report_review import export_issues
-        from core.xml_followup import register_top
         from core.yield_calc import build_yield_report_aggregation
 
         if not self.report_ready():
             return
         issues = export_issues(self.summary)
         if issues:
-            QMessageBox.warning(self, _('TOP 3 이미지 등록'), '\n'.join(issues))
+            QMessageBox.warning(self, _('이미지 조회 등록 실패'), '\n'.join(issues))
             return
         model = self.model_in.text().strip()
         try:
             report = build_yield_report_aggregation(self.summary, model)
-            identity = register_top(model, self.summary, report)
+            if kind == xml_followup.TOP_IMAGE_JOB:
+                identity = xml_followup.register_top(model, self.summary, report)
+            else:
+                identity = xml_followup.enqueue(model, self.summary, [code for code, _count in high_rate_report_codes(report)])
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
             QMessageBox.warning(self, _('이미지 조회 등록 실패'), str(error))
             return
-        QMessageBox.information(self, _('TOP 3 이미지 등록'),
-                                _('TOP 3 이미지는 후속 XML 검증 이력에서 조회할 수 있습니다.')
-                                if identity else _('등록할 불량 코드가 없습니다.'))
+        if not identity:
+            QMessageBox.information(self, _('이미지 다운로드 범위'), _('선택한 유형에 다운로드할 불량 코드가 없습니다.'))
+        return identity
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -148,6 +164,16 @@ class YieldTab(QWidget):
         self.btn_previous_lot.clicked.connect(self.choose_previous_lot)
         self.btn_top_images = QPushButton(_('현재 LOT TOP 3 등록'))
         self.btn_top_images.clicked.connect(self.register_current_top_images)
+        self.btn_download_top_images = QPushButton(_('TOP 3 불량 이미지 다운로드'))
+        self.btn_download_high_images = QPushButton(_('3% 이상 불량 이미지 다운로드'))
+        image_actions = QHBoxLayout()
+        for button, kind in ((self.btn_download_top_images, xml_followup.TOP_IMAGE_JOB),
+                             (self.btn_download_high_images, xml_followup.IMAGE_JOB)):
+            button.setProperty('dmt_presentation', 'defect-download-button')
+            button.clicked.connect(lambda checked=False, mode=kind: self.download_current_images(mode))
+            image_actions.addWidget(button)
+        image_actions.addStretch()
+        layout.addLayout(image_actions)
         handoff_actions = QHBoxLayout()
         for button in (self.btn_workflow_inputs, self.btn_previous_lot, self.btn_top_images):
             handoff_actions.addWidget(button)
@@ -871,16 +897,14 @@ class YieldTab(QWidget):
             high = result.get("high_rate_codes", [])
             if high:
                 msg += f"\n{_('3% 이상 불량')}: " + ", ".join(high)
-            if high and self.summary.get('txt_first') and self.summary.get('total_strips'):
-                from core.xml_followup import enqueue
+            if high and self.summary.get('total_strips'):
                 try:
-                    if enqueue(self.model_in.text().strip(), self.summary, high):
+                    if xml_followup.enqueue(self.model_in.text().strip(), self.summary, high):
                         msg += '\n' + _('3% 이상 불량 이미지 조회는 후속 XML 검증 이력에서 확인할 수 있습니다.')
                 except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
                     msg += '\n' + _('이미지 조회 등록 실패') + ': ' + str(error)
-            from core.xml_followup import register_top
             try:
-                if register_top(self.model_in.text().strip(), self.summary, report):
+                if xml_followup.register_top(self.model_in.text().strip(), self.summary, report):
                     msg += '\n' + _('TOP 3 이미지는 후속 XML 검증 이력에서 조회할 수 있습니다.')
             except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
                 msg += '\n' + _('이미지 조회 등록 실패') + ': ' + str(error)

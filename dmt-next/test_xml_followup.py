@@ -41,6 +41,9 @@ class XmlFollowupTests(unittest.TestCase):
             newest = xml_followup.enqueue('OTHER', summary, ['SM03 6.67%'])
             self.assertEqual([row['id'] for row in xml_followup.list_jobs()], [newest, previous])
             self.assertEqual([row['id'] for row in xml_followup.list_jobs('model','rx')], [previous])
+            self.assertIsNone(xml_followup.claim())
+            xml_followup.request_images(previous)
+            xml_followup.request_images(newest)
             first = xml_followup.claim()
             self.assertEqual(first['id'], previous)
             self.assertIsNone(xml_followup.claim())
@@ -104,18 +107,36 @@ class XmlFollowupTests(unittest.TestCase):
                        for x, code, reason in ((1, '170', 'gather'), (2, 'EN00', 'gather'), (3, 'SM03', 'gather'),
                                                (4, 'SM04', 'gather'), (5, 'SM03', SKI_UNKNOWN_ALLOCATED),
                                                (6, '1111', 'gather'), (7, 'OT14', 'bbt'))]}}
-        counts = {'170': 11, '1111': 7, 'EN00': 10, 'SM03': 5, 'SM04': 5, 'OT14': 110}
-        report = {'final_defects_by_code_including_bbt': {code: {'count': n} for code, n in counts.items()}}
+        counts = {'170': 100, '1111': 70, 'EN00': 30, 'SM03': 5, 'SM04': 5, 'OT14': 110}
+        report = {'total_units': 1000,
+                  'final_defects_by_code_including_bbt': {code: {'count': n} for code, n in counts.items()}}
+        from core.report_codes import high_rate_report_codes, ordered_report_codes
+        self.assertEqual(high_rate_report_codes(report), [('EN00', 30)])
+        self.assertEqual(dict(ordered_report_codes(report))['OT06'], 170)
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'DMT_CACHE_DIR': folder + '/cache'}):
+            from openpyxl import load_workbook
+            from core.export_excel import export_report_to_2xlsx
+
+            path = Path(folder) / 'report.xlsx'
+            result = export_report_to_2xlsx({**report, 'ng_units': 210}, '', str(path))
+            self.assertTrue(result['success'], result)
+            self.assertEqual(result['high_rate_codes'], ['EN00 3.0%'])
+            workbook = load_workbook(path, read_only=True)
+            try:
+                sheet = workbook.active
+                self.assertEqual(sheet['H7'].value, 'EN00 3.0%')
+                self.assertEqual(sheet['H3'].value, 210)
+                self.assertIn('OT06', [cell.value for cell in next(sheet.iter_rows(max_row=1))])
+            finally:
+                workbook.close()
             identity = xml_followup.register_top('MODEL', summary, report)
             self.assertEqual(xml_followup.register_top('MODEL', summary, report), identity)
             self.assertEqual(xml_followup.list_jobs()[0]['kind'], xml_followup.TOP_IMAGE_JOB)
             row = xml_followup.read_job(identity)
             self.assertEqual(row['status'], 'pending_images')
             baseline = json.loads(row['baseline'])
-            self.assertEqual(baseline['ranking'], [['OT06', 18], ['EN00', 10], ['SM03', 5]])
-            self.assertEqual(baseline['image_assignments'], {'RX-01': [[1, 1, 'OT06'], [2, 1, 'EN00'],
-                                                                    [3, 1, 'SM03'], [6, 1, 'OT06']]})
+            self.assertEqual(baseline['ranking'], [['EN00', 30], ['SM03', 5], ['SM04', 5]])
+            self.assertEqual(baseline['image_assignments'], {'RX-01': [[2, 1, 'EN00'], [3, 1, 'SM03'], [4, 1, 'SM04']]})
             self.assertIsNone(xml_followup.claim())
             xml_followup.request_images(identity)
             xml_followup.recover()

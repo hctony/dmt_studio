@@ -31,3 +31,4 @@ aside{overflow-y:auto}nav,footer{flex-shrink:0}
 @media(max-width:1100px){.report-review .row{grid-template-columns:1fr 1fr}.report-review button{white-space:normal}}
 @media(max-width:1000px){.report-code-preview .report-code-tables,.report-code-preview .report-code-sources{grid-template-columns:minmax(0,1fr)}}
 .modal:has(.image-range-dialog){width:min(640px,95vw)}
+button.defect-download-button{background:#2674c5;color:white}

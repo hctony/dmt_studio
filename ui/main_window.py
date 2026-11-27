@@ -31,13 +31,15 @@ class MainWindow(QMainWindow):
         tabs.addTab(GatheringTab(), _("게더링 집계"))
         tabs.addTab(GatheringStripSearchTab(), _("게더링 Strip 검색"))
         tabs.addTab(InspectionStatsTab(), _("검사 통계"))
-        tabs.addTab(YieldTab(), _("수율 계산"))
+        yield_tab = YieldTab()
+        tabs.addTab(yield_tab, _("수율 계산"))
         tabs.addTab(StripDiagnosisTab(), _("StripID 진단"))
         tabs.addTab(LMDataTab(), "LM Data")
         tabs.addTab(TestTab(), _("테스트"))
         tabs.addTab(InspectionHistoryTab(), _("작업자 검사 이력"))
         self.xml_history = XmlHistoryTab()
         tabs.addTab(self.xml_history, _("후속 XML 검증 이력"))
+        yield_tab.image_download_requested.connect(self.open_image_request)
         
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("한국어", "ko")
@@ -53,9 +55,13 @@ class MainWindow(QMainWindow):
         tabs.setCornerWidget(self.lang_combo)
         
         self.setCentralWidget(tabs)
-        tabs.currentChanged.connect(lambda index: tabs.widget(6).apply_workflow_inputs() if index == 6 else None)
+        tabs.currentChanged.connect(lambda index: yield_tab.apply_workflow_inputs() if tabs.widget(index) is yield_tab else None)
         tabs.currentChanged.connect(lambda index: self.xml_history.tick() if tabs.widget(index) is self.xml_history else None)
-        
+
+    def open_image_request(self, identity):
+        self.centralWidget().setCurrentWidget(self.xml_history)
+        self.xml_history.open_image_request(identity)
+
     def change_language(self, index: int) -> None:
         lang_code = self.lang_combo.itemData(index)
         Translator().load_language(lang_code)

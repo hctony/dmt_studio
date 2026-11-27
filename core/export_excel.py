@@ -42,7 +42,7 @@ def export_report_to_2xlsx(
       final_defects_by_code_including_bbt: {code: {count, ...}}
     """
     from core.report_review import UNRESOLVED, changed_paths
-    from core.report_codes import ordered_report_codes
+    from core.report_codes import high_rate_report_codes, ordered_report_codes
     pending={code:count for code,count in ordered_report_codes(report) if code.upper() in UNRESOLVED}
     if report.get('mismatch_count',0) or pending or report.get('policy_errors'):
         return {'success':False,'error':_('불일치만 결과가 0개이고 미분류 코드가 없어야 생성할 수 있습니다. 코드 미리보기에서 검토·분류하세요.')+'\n'+str(pending)}
@@ -74,7 +74,6 @@ def export_report_to_2xlsx(
         lot_id      = report.get("lot_id", "")
 
         # ── 공통: 불량 코드 정렬 ─────────────────────────────────────────────
-        from core.report_codes import ordered_report_codes
         ordered_defects = [(code,count) for code,count in ordered_report_codes(report) if code.upper()!='OT14']
 
         DEFECT_START_COL = 10  # J 열 (1-based)
@@ -201,11 +200,8 @@ def export_report_to_2xlsx(
             f'"⚠ 불일치: 합계="&SUM({first_defect_letter}3:{last_defect_letter}3)&" / NG="&H3)'
         )
 
-        high_rate: list[str] = []
-        for code, cnt in ordered_defects:
-            if total_units > 0 and cnt / total_units >= 0.03:
-                pct = round(cnt / total_units * 100, 2)
-                high_rate.append(f"{code} {pct}%")
+        high_rate = [f"{code} {round(cnt / total_units * 100, 2)}%"
+                     for code, cnt in high_rate_report_codes(report)]
         ws["H7"] = ", ".join(high_rate) if high_rate else _("없음")
 
         # Separate verification cells: OT14 never becomes a defect column.

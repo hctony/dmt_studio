@@ -7,7 +7,7 @@ import sqlite3
 import time
 import uuid
 
-from core.report_codes import excel_code
+from core.report_codes import excel_code, followup_code, ordered_report_codes
 from core.report_trace import SKI_UNKNOWN_ALLOCATED
 from core.utils import unit_idx_to_xy
 
@@ -31,22 +31,17 @@ def connect():
 
 
 def enqueue(model, summary, high_codes):
-    high = {entry.split()[0] for entry in high_codes if entry}
+    high = {entry.split()[0] for entry in high_codes if entry and followup_code(entry.split()[0])}
     if not high:
         return None
-    if not summary.get('xml_followup_inputs'):
-        raise ValueError('XML_FOLLOWUP_MISSING_MODEL_LOT_OR_TXT')
     baseline = report_image_baseline(model, summary, high, IMAGE_JOB)
     if baseline['image_assignments']:
-        return store_job(model, summary['lot_id'], baseline, 'queued')
+        return store_job(model, summary['lot_id'], baseline, 'pending_images')
     return None
 
 
 def register_top(model, summary, report):
-    from core.report_codes import ordered_report_codes
-
-    counts = [(code, count) for code, count in ordered_report_codes(report)
-              if code.upper() not in {'OT14', 'UNKNOWN', '9998'}]
+    counts = [(code, count) for code, count in ordered_report_codes(report) if followup_code(code)]
     ranking = sorted(counts, key=lambda item: (-item[1], item[0]))[:3]
     if not ranking:
         return None
@@ -122,7 +117,7 @@ def image_baseline(baseline):
     }
 
 
-def recover():
+def recover(*, defer_queued=False):
     with closing(connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         for row in db.execute("SELECT id,status,baseline FROM jobs WHERE status IN ('queued','running','cancelling')").fetchall():
@@ -132,7 +127,7 @@ def recover():
                 status = 'pending_images' if baseline['image_assignments'] else 'images_skipped'
                 db.execute('UPDATE jobs SET status=?, updated=?, baseline=? WHERE id=?',
                            (status, time.time(), json.dumps(baseline, sort_keys=True), row['id']))
-            elif row['status'] != 'queued':
+            elif defer_queued or row['status'] != 'queued':
                 db.execute("UPDATE jobs SET status='pending_images', updated=? WHERE id=?",
                            (time.time(), row['id']))
 
@@ -180,6 +175,14 @@ def list_jobs(model='', lot='', limit=200):
                    CASE WHEN json_valid(baseline) THEN json_extract(baseline, '$.kind') END AS kind FROM jobs
             WHERE instr(upper(model), upper(?)) > 0 AND instr(upper(lot), upper(?)) > 0
             ORDER BY created DESC,id DESC LIMIT ?''', (model, lot, limit))]
+
+
+def latest_image_job_id(model, lot, kind):
+    with closing(connect()) as db:
+        row = db.execute('''SELECT id FROM jobs WHERE model=? COLLATE NOCASE AND lot=? COLLATE NOCASE
+                            AND CASE WHEN json_valid(baseline) THEN json_extract(baseline, '$.kind') END=?
+                            ORDER BY created DESC,id DESC LIMIT 1''', (model, lot, kind)).fetchone()
+        return row['id'] if row else None
 
 
 def read_job(identity, *, include_xml=False):
@@ -234,7 +237,7 @@ def image_records(baseline, records):
             continue
         if record.is_dummy:
             code = excel_code(record.ivs_1)
-            if baseline.get('kind') == TOP_IMAGE_JOB and record.is_dummy_9999 and 'SM03_DUMMY9999' in assigned.values():
+            if record.is_dummy_9999 and 'SM03_DUMMY9999' in assigned.values():
                 code = 'SM03_DUMMY9999'
             if code not in assigned.values():
                 continue

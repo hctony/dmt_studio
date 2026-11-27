@@ -1,92 +1,23 @@
-"""Shared inspection history and on-demand image actions on A PC."""
-from contextlib import suppress
+"""Shared inspection history and quantity-limited image downloads."""
 from datetime import datetime
 import json
 import os
 import sqlite3
-import threading
 
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from core import xml_followup
-from core.cancellation import OperationCancelled, check_cancelled
 from core.i18n import _
+from core.report_codes import followup_code
 from ui.worker_lifetime import start_worker
 
 
-class ImageLookupWorker(QThread):
-    dmt_background = True
-
-    def __init__(self, job):
-        super().__init__()
-        self.job = job
-        self.cancel = threading.Event()
-        self.ssh = None
-        self.stage = _('3% 이상 불량 이미지 조회')
-        self.progress(0, 0, job['lot'])
-
-    def progress(self, value, maximum, detail):
-        self.dmt_progress = {'stage': self.stage, 'detail': detail,
-                             'value': value, 'max': maximum}
-
-    def stop(self):
-        if self.cancel.is_set():
-            return
-        self.cancel.set()
-        self.dmt_progress = {**self.dmt_progress, 'stage': _('이미지 조회 중지 중')}
-        ssh = self.ssh
-        if ssh is not None:
-            def interrupt():
-                with suppress(Exception):
-                    ssh.close()
-            threading.Thread(target=interrupt, daemon=True).start()
-
-    def set_client(self, ssh):
-        self.ssh = ssh
-        check_cancelled(self.cancel.is_set)
-
-    def run(self):
-        from core.nas import connect
-        from core.xml_image_lookup import lookup_images
-
-        sftp = payload = None
-        try:
-            baseline = json.loads(self.job['baseline'])
-            if baseline.get('kind') not in xml_followup.IMAGE_JOB_KINDS:
-                # A client of an older build may have added a job since recovery.
-                xml_followup.recover()
-                return
-            if baseline['kind'] == xml_followup.TOP_IMAGE_JOB:
-                self.stage = _('TOP 3 불량 이미지 조회')
-                self.progress(0, 0, self.job['lot'])
-            check_cancelled(self.cancel.is_set)
-            _, sftp = connect(on_client=self.set_client)
-            records, details = lookup_images(sftp, self.job['model'], self.job['lot'], baseline,
-                                             self.cancel.is_set, self.progress)
-            status = 'images_ready' if records else 'images_missing'
-            if records:
-                payload = {'schema': 'dmt-studio-ivs-v1', 'records': records}
-        except OperationCancelled:
-            status, details = 'pending_images', {}
-        except Exception as error:
-            status, details = 'images_failed', {'error': str(error)}
-        finally:
-            for connection in (sftp, self.ssh):
-                if connection is not None:
-                    with suppress(Exception):
-                        connection.close()
-            self.ssh = None
-        if self.cancel.is_set():
-            status, details, payload = 'pending_images', {}, None
-        xml_followup.finish(self.job['id'], status, details, payload)
-
-
 STATUS = {
-    'pending_images': '이미지 조회 대기', 'queued': '대기 중', 'running': '이미지 조회 중',
+    'pending_images': '다운로드 요청 가능', 'queued': '대기 중', 'running': '이미지 조회 중',
     'cancelling': '이미지 조회 중지 중', 'images_ready': '이미지 후보 준비 완료',
     'images_missing': '이미지 후보 없음', 'images_skipped': '3% 이상 대상 없음',
     'images_failed': '이미지 조회 실패',
@@ -99,7 +30,27 @@ class XmlHistoryTab(QWidget):
     def __init__(self):
         super().__init__()
         self.entries = []
+        self.worker = None
         layout = QVBoxLayout(self)
+        actions = QHBoxLayout()
+        self.top_download = QPushButton(_('TOP 3 불량 이미지 다운로드'))
+        self.high_download = QPushButton(_('3% 이상 불량 이미지 다운로드'))
+        for button, kind in ((self.top_download, xml_followup.TOP_IMAGE_JOB),
+                             (self.high_download, xml_followup.IMAGE_JOB)):
+            button.setProperty('dmt_presentation', 'defect-download-button')
+            button.clicked.connect(lambda checked=False, mode=kind: self.open_selected_request(mode))
+            actions.addWidget(button)
+        self.stop_download = QPushButton(_('이미지 다운로드 중지'))
+        self.stop_download.setEnabled(False)
+        self.stop_download.clicked.connect(self.cancel_download)
+        actions.addWidget(self.stop_download)
+        actions.addStretch()
+        layout.addLayout(actions)
+        self.download_status = QLabel()
+        self.download_status.setWordWrap(True)
+        self.download_status.hide()
+        layout.addWidget(self.download_status)
+
         search = QHBoxLayout()
         self.model_filter = QLineEdit()
         self.lot_filter = QLineEdit()
@@ -118,21 +69,9 @@ class XmlHistoryTab(QWidget):
         self.detail = QTextEdit()
         self.detail.setReadOnly(True)
         layout.addWidget(self.detail, 2)
-        self.lookup = QPushButton(_('3% 이상 불량 이미지 조회'))
-        self.lookup.clicked.connect(self.request_lookup)
-        self.stop_lookup = QPushButton(_('이미지 조회 중지'))
-        self.stop_lookup.clicked.connect(self.cancel_lookup)
-        self.download = QPushButton(_('3% 이상 불량 이미지 다운로드'))
-        self.download.clicked.connect(self.download_images)
-        actions = QHBoxLayout()
-        for button in (self.lookup, self.stop_lookup, self.download):
-            button.setEnabled(False)
-            actions.addWidget(button)
-        layout.addLayout(actions)
         for field in (self.model_filter, self.lot_filter):
             field.editingFinished.connect(self.refresh)
 
-        self.worker = None
         self.server = os.environ.get('DMT_REMOTE_SESSION') != '1' and os.environ.get('DMT_XML_QUEUE') == '1'
         self.recovered = False
         self.timer = QTimer(self)
@@ -141,18 +80,9 @@ class XmlHistoryTab(QWidget):
 
     def tick(self):
         try:
-            if self.server and self.timer.isActive():
-                if not self.recovered:
-                    xml_followup.recover()
-                    self.recovered = True
-                if self.worker and self.worker.isRunning():
-                    if xml_followup.is_cancelling(self.worker.job['id']):
-                        self.worker.stop()
-                else:
-                    job = xml_followup.claim()
-                    if job:
-                        self.worker = ImageLookupWorker(job)
-                        start_worker(self, self.worker)
+            if self.server and self.timer.isActive() and not self.recovered:
+                xml_followup.recover(defer_queued=True)
+                self.recovered = True
             if self.isVisible():
                 self.refresh()
         except (OSError, sqlite3.Error) as error:
@@ -165,14 +95,6 @@ class XmlHistoryTab(QWidget):
             self.worker.stop()
             return self.worker
         return None
-
-    def request_lookup(self):
-        xml_followup.request_images(self.selection_id())
-        self.tick()
-
-    def cancel_lookup(self):
-        xml_followup.cancel_images(self.selection_id())
-        self.tick()
 
     def refresh(self):
         entries = xml_followup.list_jobs(self.model_filter.text().strip(), self.lot_filter.text().strip())
@@ -197,12 +119,101 @@ class XmlHistoryTab(QWidget):
         row = self.table.currentRow()
         return self.entries[row]['id'] if 0 <= row < len(self.entries) else None
 
+    def open_selected_request(self, kind):
+        title = self.top_download.text() if kind == xml_followup.TOP_IMAGE_JOB else self.high_download.text()
+        row = self.table.currentRow()
+        if not 0 <= row < len(self.entries):
+            QMessageBox.information(self, title, _('이력에서 LOT를 선택하거나 수율 계산 화면에서 이미지를 여세요.'))
+            return
+        selected = self.entries[row]
+        identity = selected['id'] if selected['kind'] == kind else (
+            xml_followup.latest_image_job_id(selected['model'], selected['lot'], kind))
+        if not identity and kind == xml_followup.IMAGE_JOB and not selected['kind']:
+            identity = selected['id']
+        if not identity:
+            QMessageBox.information(self, title,
+                                    _('수율 계산에서 이 LOT의 데이터를 불러와 계산한 뒤 다운로드 버튼을 누르세요.'))
+            return
+        self.open_image_request(identity)
+
+    def open_image_request(self, identity):
+        from ui.image_range import FollowupImageRequestDialog
+
+        if self.worker and self.worker.isRunning():
+            return
+        entry = xml_followup.read_job(identity)
+        if not entry:
+            return
+        if not any(row['id'] == identity for row in self.entries):
+            self.model_filter.setText(entry['model'])
+            self.lot_filter.setText(entry['lot'])
+            self.refresh()
+        for index, row in enumerate(self.entries):
+            if row['id'] == identity:
+                self.table.selectRow(index)
+                break
+
+        baseline = json.loads(entry['baseline'])
+        kind = baseline.get('kind')
+        combined = kind == xml_followup.TOP_IMAGE_JOB
+        title = self.top_download.text() if combined else self.high_download.text()
+        codes = [code for code, _count in baseline.get('ranking', [])] if combined else baseline.get('high', [])
+        codes = [code for code in codes if followup_code(code)]
+        mapped = {row[2] for rows in baseline.get('image_assignments', {}).values() for row in rows}
+        reported = json.loads(entry['details']).get('image_counts', {}) if entry['xml'] else {}
+        available = (mapped | {code for code, count in reported.items() if count}) & set(codes)
+        if not available:
+            QMessageBox.information(self, title, _('선택한 유형에 다운로드할 불량 코드가 없습니다.'))
+            return
+        self.range_dialog = FollowupImageRequestDialog(title, codes, available, combined=combined, parent=self)
+        self.range_dialog.submitted.connect(
+            lambda quantities: self.start_download(entry, baseline, quantities, combined))
+        self.range_dialog.show()
+
+    def start_download(self, entry, baseline, quantities, combined):
+        from workers.ivs_workers import FollowupImageDownloadThread
+
+        directory = QFileDialog.getExistingDirectory(self, _('이미지 저장 폴더'))
+        if not directory or (self.worker and self.worker.isRunning()):
+            return
+        self.worker = FollowupImageDownloadThread({}, quantities, directory, combined=combined,
+                                                   job=entry, baseline=baseline)
+        self.worker.completed.connect(self.show_download_result)
+        self.worker.failed.connect(self.show_download_error)
+        self.worker.finished.connect(self.download_finished)
+        self.set_download_active(True)
+        self.set_download_status(_('이미지 다운로드 중') + ' · ' + entry['lot'])
+        start_worker(self, self.worker)
+
+    def set_download_status(self, message):
+        self.download_status.setText(message)
+        self.download_status.show()
+
+    def set_download_active(self, active):
+        self.top_download.setEnabled(not active)
+        self.high_download.setEnabled(not active)
+        self.stop_download.setEnabled(active)
+
+    def cancel_download(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.stop_download.setEnabled(False)
+            self.set_download_status(_('이미지 다운로드 중지 중'))
+
+    def download_finished(self):
+        self.set_download_active(False)
+
+    def show_download_result(self, saved, cancelled):
+        summary = ', '.join(f'{code} {count}/{self.worker.quantities[code]}' for code, count in saved.items())
+        title = _('이미지 다운로드가 중지되었습니다.') if cancelled else _('다운로드 완료')
+        self.set_download_status(f'{title} · {self.worker.job["lot"]} · {summary}')
+
+    def show_download_error(self, message):
+        self.set_download_status(_('다운로드 실패') + ' · ' + message.splitlines()[-1])
+
     def show_details(self):
         identity = self.selection_id()
         entry = xml_followup.read_job(identity) if identity else None
-        self.lookup.setEnabled(False)
-        self.stop_lookup.setEnabled(False)
-        self.download.setEnabled(False)
         if not entry:
             self.detail.clear()
             return
@@ -210,17 +221,15 @@ class XmlHistoryTab(QWidget):
         baseline = json.loads(entry['baseline'])
         image_job = baseline.get('kind') in xml_followup.IMAGE_JOB_KINDS
         top_job = baseline.get('kind') == xml_followup.TOP_IMAGE_JOB
-        self.lookup.setText(_('TOP 3 불량 이미지 조회') if top_job else _('3% 이상 불량 이미지 조회'))
-        self.download.setText(_('TOP 3 불량 이미지 다운로드') if top_job else _('3% 이상 불량 이미지 다운로드'))
-        status = entry['status']
         strip_count = baseline.get('strip_count', len(baseline.get('strips', [])))
         lines = [_(STATUS[entry['status']]),
                  _('성적서 집계 Strip / Unit') + f": {strip_count} / {baseline.get('total_units', 0)}"]
         if image_job:
-            lines.append(_('이미지 대상 Strip') + f": {len(baseline['image_assignments'])}")
+            strips = sum(any(followup_code(row[2]) for row in rows) for rows in baseline['image_assignments'].values())
+            lines.append(_('이미지 대상 Strip') + f": {strips}")
         if top_job:
-            lines.append(_('TOP 3 불량 Unit 수') + ': ' +
-                         ', '.join(f'{code}: {count:,}' for code, count in baseline['ranking']))
+            lines.append(_('TOP 3 불량 Unit 수') + ': ' + ', '.join(
+                f'{code}: {count:,}' for code, count in baseline['ranking'] if followup_code(code)))
         groups = [('xml_only', 'XML에만 있는 Strip'), ('txt_only', 'TXT에만 있는 Strip'),
                   ('older_txt', '최신 XML보다 오래된 공정 TXT'), ('xml_only_coords', 'XML에만 기록된 불량 좌표'),
                   ('image_unmatched_strips', '이미지 후보를 찾지 못한 Strip')]
@@ -231,62 +240,10 @@ class XmlHistoryTab(QWidget):
                 lines.extend(found)
         if details.get('image_unidentified_folders'):
             lines.append(_('바코드를 확인하지 못한 폴더') + f": {details['image_unidentified_folders']}")
-        if details.get('image_counts'):
+        counts = {code: count for code, count in details.get('image_counts', {}).items() if followup_code(code)}
+        if counts:
             lines.append((_('TOP 3 불량 이미지 후보') if top_job else _('3% 이상 불량 이미지 후보')) + ': ' +
-                         ', '.join(f'{code}: {count}' for code, count in details['image_counts'].items()))
+                         ', '.join(f'{code}: {count}' for code, count in counts.items()))
         if details.get('error'):
             lines.append(details['error'])
         self.detail.setPlainText('\n'.join(lines))
-        self.lookup.setEnabled(image_job and bool(baseline['image_assignments'])
-                               and status in {'pending_images', 'images_missing', 'images_failed'})
-        self.stop_lookup.setEnabled(image_job and status in {'queued', 'running'})
-        self.download.setEnabled(bool(entry['xml'] and any(details.get('image_counts', {}).values())))
-
-    def download_images(self):
-        from core.ivs import load_records_from_payload
-        from core.image_catalog import ImageCatalog
-        from ui.image_range import ImageRangeDialog, TopImageDownloadDialog
-        entry = xml_followup.read_job(self.selection_id(), include_xml=True)
-        if not entry or not entry['xml']:
-            return
-        records = load_records_from_payload(json.loads(entry['xml']))
-        baseline = json.loads(entry['baseline'])
-        if baseline.get('kind') not in xml_followup.IMAGE_JOB_KINDS:
-            records = xml_followup.image_records(baseline, records)
-        catalog = ImageCatalog(records)
-        if baseline.get('kind') == xml_followup.TOP_IMAGE_JOB:
-            self.range_dialog = TopImageDownloadDialog(baseline['ranking'], catalog.counts(), parent=self)
-            self.range_dialog.submitted.connect(lambda quantities: self.save_top_images(catalog, quantities))
-        else:
-            self.catalog = catalog
-            self.range_dialog = ImageRangeDialog(self.catalog.counts(), download=True, parent=self)
-            self.range_dialog.submitted.connect(self.save_image_range)
-        self.range_dialog.show()
-
-    def save_top_images(self, catalog, quantities):
-        from workers.ivs_workers import TopImageDownloadThread
-
-        directory = QFileDialog.getExistingDirectory(self, _('이미지 저장 폴더'))
-        if not directory:
-            return
-        candidates = {code: catalog.download_records(code, 1, catalog.counts()[code]) for code in quantities}
-        worker = TopImageDownloadThread(candidates, quantities, directory)
-        def show_saved(saved):
-            lines = [f'{code}: {saved[code]}/{total}' for code, total in quantities.items()]
-            if saved != quantities:
-                lines.append(_('세 조명이 모두 있는 세트만 저장했습니다.'))
-            QMessageBox.information(self, _('다운로드 완료'), '\n'.join(lines))
-        worker.finished.connect(show_saved)
-        worker.failed.connect(lambda failure: QMessageBox.warning(self, _('다운로드 실패'), failure))
-        start_worker(self, worker)
-
-    def save_image_range(self, code, start, end):
-        from workers.ivs_workers import DownloadThread
-        directory = QFileDialog.getExistingDirectory(self, _('이미지 저장 폴더'))
-        if not directory:
-            return
-        worker = DownloadThread(self.catalog.download_records(code, start, end), directory, code)
-        worker.finished.connect(lambda saved: QMessageBox.information(
-            self, _('다운로드 완료'), str(saved)))
-        worker.failed.connect(lambda failure: QMessageBox.warning(self, _('다운로드 실패'), failure))
-        start_worker(self, worker)

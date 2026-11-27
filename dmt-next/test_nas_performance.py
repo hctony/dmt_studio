@@ -171,7 +171,7 @@ class NasPerformanceTests(unittest.TestCase):
     def test_top_image_download_saves_one_png_per_complete_set_and_stops_at_quantity(self):
         from PySide6.QtGui import QColor, QImage
         from PySide6.QtWidgets import QApplication
-        from workers.ivs_workers import TopImageDownloadThread
+        from workers.ivs_workers import FollowupImageDownloadThread
 
         os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
         app = QApplication.instance() or QApplication([])
@@ -190,15 +190,15 @@ class NasPerformanceTests(unittest.TestCase):
                 image.fill(QColor(color))
                 self.assertTrue(image.save(str(self.root / path.lstrip('/'))))
         sftp = self.session()
-        worker = TopImageDownloadThread({'SM03': candidates, 'OT06': [candidates[0]]},
-                                        {'SM03': 2, 'OT06': 1}, self.root / 'export')
+        worker = FollowupImageDownloadThread({'SM03': candidates, 'OT12': [replace(candidates[0], ivs_1='OT12')]},
+                                            {'SM03': 2, 'OT12': 1}, self.root / 'export', combined=True)
         counts, errors = [], []
-        worker.finished.connect(counts.append)
+        worker.completed.connect(lambda saved, cancelled: counts.append((saved, cancelled)))
         worker.failed.connect(errors.append)
         with patch('workers.ivs_workers.connect', return_value=(SimpleNamespace(close=lambda: None), sftp)):
             worker.run()
         self.assertEqual(errors, [])
-        self.assertEqual(counts, [{'SM03': 2, 'OT06': 0}])
+        self.assertEqual(counts, [({'SM03': 2, 'OT12': 0}, False)])
         self.assertEqual(sftp.raw.reads, 6)
         outputs = sorted((self.root / 'export').rglob('*.png'))
         self.assertEqual(len(outputs), 2)
@@ -207,6 +207,60 @@ class NasPerformanceTests(unittest.TestCase):
             self.assertEqual((combined.width(), combined.height()), (384, 172))
             self.assertEqual([combined.pixelColor(x, 169) for x in (125, 253, 381)],
                              [QColor(color) for color in colors])
+
+        separate = FollowupImageDownloadThread({'SM03': candidates}, {'SM03': 1}, self.root / 'separate', combined=False)
+        with patch('workers.ivs_workers.connect', return_value=(SimpleNamespace(close=lambda: None), self.session())):
+            separate.run()
+        files = sorted((self.root / 'separate').rglob('*.png'))
+        self.assertEqual(len(files), 2)
+        self.assertTrue(files[0].name.endswith('_LIGHT_0.png'))
+        self.assertTrue(files[1].name.endswith('_LIGHT_1.png'))
+
+    def test_cold_download_stops_before_other_trials_and_machines(self):
+        from PySide6.QtGui import QColor, QImage
+        from PySide6.QtWidgets import QApplication
+        from workers.ivs_workers import FollowupImageDownloadThread
+
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        app = QApplication.instance() or QApplication([])
+        self.assertIsNotNone(app)
+        lot_dir = self.root / 'data/AFVI1/M/RX-'
+        newest = lot_dir / '9/2'
+        newest.mkdir(parents=True)
+        (lot_dir / '1').mkdir()
+        (lot_dir / '9/1').mkdir()
+        (self.root / 'data/AFVI2/M/RX-/1').mkdir(parents=True)
+        (lot_dir / '9/bundle.ini').write_text('ViaMCName=AFVI1\nIndex=1,2\n')
+        (newest / 'sample_ivs.xml').write_text('<Root barcode="RX-01"><Unit><P0 unit_idx="0" ivs_1="SM03"/></Unit></Root>')
+        photos = newest / 'Unit/U0/FC'
+        photos.mkdir(parents=True)
+        for suffix, color in zip(('_Sub2', '', '_Sub1'), ('red', 'green', 'blue')):
+            image = QImage(64, 64, QImage.Format_RGB32)
+            image.fill(QColor(color))
+            self.assertTrue(image.save(str(photos / f'p0{suffix}.bmp')))
+        for path, stamp in ((lot_dir / '1', 1000000000), (lot_dir / '9/1', 1000000000),
+                            (lot_dir / '9', 1000000400), (newest, 1000000400)):
+            os.utime(path, (stamp, stamp))
+
+        baseline = {'scope': {}, 'evidence': {'RX-01': {'width': 4}},
+                    'image_assignments': {'RX-01': [[1, 1, 'SM03']]}}
+        job = {'model': 'M', 'lot': 'RX-'}
+        session = self.session()
+        worker = FollowupImageDownloadThread({}, {'SM03': 1}, self.root / 'export',
+                                            combined=True, job=job, baseline=baseline)
+        saved, errors = [], []
+        worker.completed.connect(lambda counts, _: saved.append(counts))
+        worker.failed.connect(errors.append)
+        with patch('core.nas.NAS_ROOT', '/data'), patch('core.nas.MACHINES', ['AFVI1', 'AFVI2']), patch(
+                'workers.ivs_workers.connect', return_value=(SimpleNamespace(close=lambda: None), session)), patch.object(
+                session.raw, 'listdir_attr', wraps=session.raw.listdir_attr) as listed, patch.object(
+                session.raw, 'stat', wraps=session.raw.stat) as stats:
+            worker.run()
+        self.assertEqual(errors, [])
+        self.assertEqual(saved, [{'SM03': 1}])
+        visited = {call.args[0] for call in listed.call_args_list + stats.call_args_list}
+        self.assertFalse(any('AFVI2' in p or '/RX-/1' in p or '/RX-/9/1' in p for p in visited), visited)
+        self.assertEqual(len(list((self.root / 'export').rglob('*.png'))), 1)
 
 
 class ImageCatalogTests(unittest.TestCase):

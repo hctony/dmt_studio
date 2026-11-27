@@ -317,8 +317,16 @@ def parse_trial_context(trial_path: str) -> TrialContext:
     return TrialContext(machine=machine, model=model, lot=lot, trial=trial, path=normalized)
 
 
-def list_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient, should_stop=None) -> list[TrialContext]:
-    trials: list[TrialContext] = []
+def recent_dirs(sftp, path):
+    try:
+        entries = [attr for attr in sftp.listdir_attr(path) if stat.S_ISDIR(attr.st_mode)]
+    except FileNotFoundError:
+        return []
+    return [attr.filename for attr in sorted(
+        entries, key=lambda attr: (attr.st_mtime or 0, folder_index(attr.filename) or 0, attr.filename), reverse=True)]
+
+
+def iter_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient, should_stop=None, *, newest_first=False):
     for machine in MACHINES:
         check_cancelled(should_stop)
         machine_path = f"{NAS_ROOT}/{machine}"
@@ -331,9 +339,11 @@ def list_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient, should_stop
         lot_path = f"{machine_path}/{model}/{lot}"
         if not path_exists(sftp, lot_path):
             continue
-        for trial in iter_dirs(sftp, lot_path):
+        trials = recent_dirs(sftp, lot_path) if newest_first else iter_dirs(sftp, lot_path)
+        for trial in trials:
             check_cancelled(should_stop)
-            trials.append(
-                TrialContext(machine=machine, model=model, lot=lot, trial=trial, path=f"{lot_path}/{trial}")
-            )
-    return trials
+            yield TrialContext(machine=machine, model=model, lot=lot, trial=trial, path=f"{lot_path}/{trial}")
+
+
+def list_lot_trials(model: str, lot: str, sftp: paramiko.SFTPClient, should_stop=None) -> list[TrialContext]:
+    return list(iter_lot_trials(model, lot, sftp, should_stop))

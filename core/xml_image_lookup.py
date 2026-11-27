@@ -6,7 +6,9 @@ from core.cancellation import check_cancelled
 from core.image_catalog import ImageCatalog
 from core.ivs import find_ivs_files, parse_ivs_xml
 from core.ivs_latest import epoch_key, select_latest
-from core.nas import find_fc_file, folder_index, iter_dirs, list_lot_trials, load_valid_bundle_indexes
+from core.nas import (
+    find_fc_file, folder_index, iter_dirs, iter_lot_trials, list_lot_trials, load_valid_bundle_indexes, recent_dirs,
+)
 from core.rework_scope import cutoff
 from core.xml_followup import image_records
 
@@ -50,6 +52,42 @@ def _folder_barcodes(sftp, context, folder, files):
         else:
             return by_barcode, True
     return by_barcode, False
+
+
+def iter_image_samples(sftp, model, lot, baseline, remaining_codes, should_stop, progress):
+    """Yield candidates as each folder is visited so the caller can stop at its quota."""
+    codes_by_strip = {strip: {code for _, _, code in rows} for strip, rows in baseline['image_assignments'].items()}
+    if not any(codes & remaining_codes for codes in codes_by_strip.values()):
+        return
+    if any(not value or value in {'.', '..'} or '/' in value or '\\' in value for value in (model, lot)):
+        raise ValueError('Invalid model or LOT')
+    sftp.should_stop = should_stop
+    sftp._dmt_lazy_images = True
+    after = cutoff(baseline.get('scope', {}))
+    for context in iter_lot_trials(model, lot, sftp, should_stop, newest_first=True):
+        valid = load_valid_bundle_indexes(context.path, sftp)
+        if not valid:
+            continue
+        for folder in recent_dirs(sftp, context.path):
+            check_cancelled(should_stop)
+            if folder_index(folder) not in valid:
+                continue
+            progress(f'{lot} · {context.machine}/{context.trial}/{folder}')
+            root = f'{context.path}/{folder}'
+            files = _file_metadata(sftp, find_ivs_files(root, sftp), after)
+            if not files:
+                continue
+            barcodes, _unidentified = _folder_barcodes(sftp, context, folder, files)
+            matching = {strip: baseline['image_assignments'][strip] for strip in barcodes
+                        if codes_by_strip.get(strip, set()) & remaining_codes}
+            paths = sorted({path for strip in matching for path in barcodes[strip]},
+                           key=lambda path: (files[path].st_mtime or 0, path), reverse=True)
+            sample = {**baseline, 'image_assignments': matching}
+            for path in paths:
+                records = parse_ivs_xml(path, sftp, context, folder, should_stop=should_stop)
+                for record in image_records(sample, records):
+                    if record.ivs_1 in remaining_codes:
+                        yield record
 
 
 def lookup_images(sftp, model, lot, baseline, should_stop, progress):
