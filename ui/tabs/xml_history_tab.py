@@ -1,4 +1,4 @@
-"""Shared inspection history and high-rate image lookup on A PC."""
+"""Shared inspection history and on-demand image actions on A PC."""
 from contextlib import suppress
 from datetime import datetime
 import json
@@ -26,10 +26,11 @@ class ImageLookupWorker(QThread):
         self.job = job
         self.cancel = threading.Event()
         self.ssh = None
+        self.stage = _('3% 이상 불량 이미지 조회')
         self.progress(0, 0, job['lot'])
 
     def progress(self, value, maximum, detail):
-        self.dmt_progress = {'stage': _('3% 이상 불량 이미지 조회'), 'detail': detail,
+        self.dmt_progress = {'stage': self.stage, 'detail': detail,
                              'value': value, 'max': maximum}
 
     def stop(self):
@@ -55,10 +56,13 @@ class ImageLookupWorker(QThread):
         sftp = payload = None
         try:
             baseline = json.loads(self.job['baseline'])
-            if baseline.get('kind') != xml_followup.IMAGE_JOB:
+            if baseline.get('kind') not in xml_followup.IMAGE_JOB_KINDS:
                 # A client of an older build may have added a job since recovery.
                 xml_followup.recover()
                 return
+            if baseline['kind'] == xml_followup.TOP_IMAGE_JOB:
+                self.stage = _('TOP 3 불량 이미지 조회')
+                self.progress(0, 0, self.job['lot'])
             check_cancelled(self.cancel.is_set)
             _, sftp = connect(on_client=self.set_client)
             records, details = lookup_images(sftp, self.job['model'], self.job['lot'], baseline,
@@ -88,6 +92,7 @@ STATUS = {
     'images_failed': '이미지 조회 실패',
     'verified': '검증 완료', 'difference': '차이 발견', 'incomplete': '검증 미완료', 'failed': '검증 실패',
 }
+KIND_LABELS = {xml_followup.IMAGE_JOB: '3% 이상', xml_followup.TOP_IMAGE_JOB: 'TOP 3'}
 
 
 class XmlHistoryTab(QWidget):
@@ -103,8 +108,8 @@ class XmlHistoryTab(QWidget):
         for widget in (QLabel(_('모델')), self.model_filter, QLabel('LOT'), self.lot_filter, refresh):
             search.addWidget(widget)
         layout.addLayout(search)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels([_('처리 시각'), _('모델'), 'LOT', _('검증 상태'), _('검증 갱신 시각')])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels([_('처리 시각'), _('모델'), 'LOT', _('유형'), _('검증 상태'), _('검증 갱신 시각')])
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -179,7 +184,7 @@ class XmlHistoryTab(QWidget):
         self.table.setRowCount(len(entries))
         for index, row in enumerate(entries):
             values = [datetime.fromtimestamp(row['created']).isoformat(' ', timespec='seconds'),
-                      row['model'], row['lot'], _(STATUS[row['status']]),
+                      row['model'], row['lot'], _(KIND_LABELS.get(row['kind'], '후속 XML 검증')), _(STATUS[row['status']]),
                       datetime.fromtimestamp(row['updated']).isoformat(' ', timespec='seconds')]
             for column, value in enumerate(values):
                 self.table.setItem(index, column, QTableWidgetItem(value))
@@ -203,13 +208,19 @@ class XmlHistoryTab(QWidget):
             return
         details = json.loads(entry['details'])
         baseline = json.loads(entry['baseline'])
-        image_job = baseline.get('kind') == xml_followup.IMAGE_JOB
+        image_job = baseline.get('kind') in xml_followup.IMAGE_JOB_KINDS
+        top_job = baseline.get('kind') == xml_followup.TOP_IMAGE_JOB
+        self.lookup.setText(_('TOP 3 불량 이미지 조회') if top_job else _('3% 이상 불량 이미지 조회'))
+        self.download.setText(_('TOP 3 불량 이미지 다운로드') if top_job else _('3% 이상 불량 이미지 다운로드'))
         status = entry['status']
         strip_count = baseline.get('strip_count', len(baseline.get('strips', [])))
         lines = [_(STATUS[entry['status']]),
                  _('성적서 집계 Strip / Unit') + f": {strip_count} / {baseline.get('total_units', 0)}"]
         if image_job:
             lines.append(_('이미지 대상 Strip') + f": {len(baseline['image_assignments'])}")
+        if top_job:
+            lines.append(_('TOP 3 불량 Unit 수') + ': ' +
+                         ', '.join(f'{code}: {count:,}' for code, count in baseline['ranking']))
         groups = [('xml_only', 'XML에만 있는 Strip'), ('txt_only', 'TXT에만 있는 Strip'),
                   ('older_txt', '최신 XML보다 오래된 공정 TXT'), ('xml_only_coords', 'XML에만 기록된 불량 좌표'),
                   ('image_unmatched_strips', '이미지 후보를 찾지 못한 Strip')]
@@ -221,30 +232,53 @@ class XmlHistoryTab(QWidget):
         if details.get('image_unidentified_folders'):
             lines.append(_('바코드를 확인하지 못한 폴더') + f": {details['image_unidentified_folders']}")
         if details.get('image_counts'):
-            lines.append(_('3% 이상 불량 이미지 후보') + ': ' +
+            lines.append((_('TOP 3 불량 이미지 후보') if top_job else _('3% 이상 불량 이미지 후보')) + ': ' +
                          ', '.join(f'{code}: {count}' for code, count in details['image_counts'].items()))
         if details.get('error'):
             lines.append(details['error'])
         self.detail.setPlainText('\n'.join(lines))
-        self.lookup.setEnabled(image_job and status in {'pending_images', 'images_missing', 'images_failed'})
+        self.lookup.setEnabled(image_job and bool(baseline['image_assignments'])
+                               and status in {'pending_images', 'images_missing', 'images_failed'})
         self.stop_lookup.setEnabled(image_job and status in {'queued', 'running'})
         self.download.setEnabled(bool(entry['xml'] and any(details.get('image_counts', {}).values())))
 
     def download_images(self):
         from core.ivs import load_records_from_payload
         from core.image_catalog import ImageCatalog
-        from ui.image_range import ImageRangeDialog
+        from ui.image_range import ImageRangeDialog, TopImageDownloadDialog
         entry = xml_followup.read_job(self.selection_id(), include_xml=True)
         if not entry or not entry['xml']:
             return
         records = load_records_from_payload(json.loads(entry['xml']))
         baseline = json.loads(entry['baseline'])
-        if baseline.get('kind') != xml_followup.IMAGE_JOB:
+        if baseline.get('kind') not in xml_followup.IMAGE_JOB_KINDS:
             records = xml_followup.image_records(baseline, records)
-        self.catalog = ImageCatalog(records)
-        self.range_dialog = ImageRangeDialog(self.catalog.counts(), download=True, parent=self)
-        self.range_dialog.submitted.connect(self.save_image_range)
+        catalog = ImageCatalog(records)
+        if baseline.get('kind') == xml_followup.TOP_IMAGE_JOB:
+            self.range_dialog = TopImageDownloadDialog(baseline['ranking'], catalog.counts(), parent=self)
+            self.range_dialog.submitted.connect(lambda quantities: self.save_top_images(catalog, quantities))
+        else:
+            self.catalog = catalog
+            self.range_dialog = ImageRangeDialog(self.catalog.counts(), download=True, parent=self)
+            self.range_dialog.submitted.connect(self.save_image_range)
         self.range_dialog.show()
+
+    def save_top_images(self, catalog, quantities):
+        from workers.ivs_workers import TopImageDownloadThread
+
+        directory = QFileDialog.getExistingDirectory(self, _('이미지 저장 폴더'))
+        if not directory:
+            return
+        candidates = {code: catalog.download_records(code, 1, catalog.counts()[code]) for code in quantities}
+        worker = TopImageDownloadThread(candidates, quantities, directory)
+        def show_saved(saved):
+            lines = [f'{code}: {saved[code]}/{total}' for code, total in quantities.items()]
+            if saved != quantities:
+                lines.append(_('세 조명이 모두 있는 세트만 저장했습니다.'))
+            QMessageBox.information(self, _('다운로드 완료'), '\n'.join(lines))
+        worker.finished.connect(show_saved)
+        worker.failed.connect(lambda failure: QMessageBox.warning(self, _('다운로드 실패'), failure))
+        start_worker(self, worker)
 
     def save_image_range(self, code, start, end):
         from workers.ivs_workers import DownloadThread

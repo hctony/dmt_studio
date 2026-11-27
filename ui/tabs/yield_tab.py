@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -62,9 +63,11 @@ class YieldTab(QWidget):
         self.txt_paths: list[Path] = []
         self._build_ui()
 
-    def apply_workflow_inputs(self, force=False) -> None:
+    def apply_workflow_inputs(self, force=False, *, entry=None) -> None:
         from core.yield_handoff import latest, PATH_FIELDS
-        entry = latest()
+        selected = entry is not None
+        if not selected:
+            entry = latest()
         if not entry:
             self.handoff_status.setText(_("이전 완료 데이터가 없습니다. IVS 조회 또는 게더링을 먼저 실행하세요."))
             return
@@ -95,8 +98,44 @@ class YieldTab(QWidget):
                     'units_per_strip_in': 'units_per_strip', 'xout_limit_in': 'xout_limit'}
         for name, setting in settings.items():
             save_line_edit(getattr(self, name), 'yield/' + setting)
-        self.handoff_status.setText(_("최근 완료 데이터 연결") + ': ' + identity + '\n' +
+        label = _("선택한 LOT 데이터 연결") if selected else _("최근 완료 데이터 연결")
+        self.handoff_status.setText(label + ': ' + identity + '\n' +
             _("빈 항목은 아직 완료 데이터가 없습니다. 확인 후 수율을 계산하세요."))
+
+    def choose_previous_lot(self):
+        from core.yield_handoff import gathered_contexts
+
+        entries = {f"{entry['model']} / {entry['lot']}": entry for entry in gathered_contexts()}
+        if not entries:
+            QMessageBox.information(self, _('이전 LOT 데이터 불러오기'),
+                                    _('저장된 게더링 이력이 없습니다. 기존 TXT와 수율 입력을 직접 선택하세요.'))
+            return
+        choice, accepted = QInputDialog.getItem(
+            self, _('이전 LOT 데이터 불러오기'), _('등록할 LOT 선택'), list(entries), 0, False)
+        if accepted and choice in entries:
+            self.apply_workflow_inputs(force=True, entry=entries[choice])
+
+    def register_current_top_images(self):
+        from core.report_review import export_issues
+        from core.xml_followup import register_top
+        from core.yield_calc import build_yield_report_aggregation
+
+        if not self.report_ready():
+            return
+        issues = export_issues(self.summary)
+        if issues:
+            QMessageBox.warning(self, _('TOP 3 이미지 등록'), '\n'.join(issues))
+            return
+        model = self.model_in.text().strip()
+        try:
+            report = build_yield_report_aggregation(self.summary, model)
+            identity = register_top(model, self.summary, report)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+            QMessageBox.warning(self, _('이미지 조회 등록 실패'), str(error))
+            return
+        QMessageBox.information(self, _('TOP 3 이미지 등록'),
+                                _('TOP 3 이미지는 후속 XML 검증 이력에서 조회할 수 있습니다.')
+                                if identity else _('등록할 불량 코드가 없습니다.'))
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -105,7 +144,14 @@ class YieldTab(QWidget):
         layout.addWidget(self.handoff_status)
         self.btn_workflow_inputs = QPushButton(_("최근 완료 데이터 다시 불러오기"))
         self.btn_workflow_inputs.clicked.connect(lambda: self.apply_workflow_inputs(force=True))
-        layout.addWidget(self.btn_workflow_inputs)
+        self.btn_previous_lot = QPushButton(_('이전 LOT 데이터 불러오기'))
+        self.btn_previous_lot.clicked.connect(self.choose_previous_lot)
+        self.btn_top_images = QPushButton(_('현재 LOT TOP 3 등록'))
+        self.btn_top_images.clicked.connect(self.register_current_top_images)
+        handoff_actions = QHBoxLayout()
+        for button in (self.btn_workflow_inputs, self.btn_previous_lot, self.btn_top_images):
+            handoff_actions.addWidget(button)
+        layout.addLayout(handoff_actions)
         config = QGroupBox(_("수율 계산 입력"))
         form = QFormLayout(config)
         self.model_in = QLineEdit(DEFAULT_MODEL)
@@ -832,6 +878,12 @@ class YieldTab(QWidget):
                         msg += '\n' + _('3% 이상 불량 이미지 조회는 후속 XML 검증 이력에서 확인할 수 있습니다.')
                 except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
                     msg += '\n' + _('이미지 조회 등록 실패') + ': ' + str(error)
+            from core.xml_followup import register_top
+            try:
+                if register_top(self.model_in.text().strip(), self.summary, report):
+                    msg += '\n' + _('TOP 3 이미지는 후속 XML 검증 이력에서 조회할 수 있습니다.')
+            except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+                msg += '\n' + _('이미지 조회 등록 실패') + ': ' + str(error)
             QMessageBox.information(self, _("1차 성적서 생성 완료"), msg)
         else:
             QMessageBox.critical(self, _("에러 발생"), result.get("error", "Unknown error"))

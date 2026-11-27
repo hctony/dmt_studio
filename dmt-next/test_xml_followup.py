@@ -93,3 +93,30 @@ class XmlFollowupTests(unittest.TestCase):
         selected = xml_followup.image_records(baseline, [original])
         self.assertEqual([record.ivs_1 for record in selected], ['OT06'])
         self.assertEqual(original.ivs_1, '9998')
+
+    def test_top_three_uses_report_counts_and_waits_for_an_explicit_request(self):
+        from core.report_trace import SKI_UNKNOWN_ALLOCATED
+
+        summary = {'lot_id': 'RX-', 'units_per_strip': 88, 'total_units': 1000, 'report_trace': {
+            'selected_strip_ids': ['RX-01'],
+            'strips': {'RX-01': {'x_count': 22}},
+            'groups': [{'strip_id': 'RX-01', 'code': code, 'coords': [[x, 1]], 'reason': reason}
+                       for x, code, reason in ((1, '170', 'gather'), (2, 'EN00', 'gather'), (3, 'SM03', 'gather'),
+                                               (4, 'SM04', 'gather'), (5, 'SM03', SKI_UNKNOWN_ALLOCATED),
+                                               (6, '1111', 'gather'), (7, 'OT14', 'bbt'))]}}
+        counts = {'170': 11, '1111': 7, 'EN00': 10, 'SM03': 5, 'SM04': 5, 'OT14': 110}
+        report = {'final_defects_by_code_including_bbt': {code: {'count': n} for code, n in counts.items()}}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'DMT_CACHE_DIR': folder + '/cache'}):
+            identity = xml_followup.register_top('MODEL', summary, report)
+            self.assertEqual(xml_followup.register_top('MODEL', summary, report), identity)
+            self.assertEqual(xml_followup.list_jobs()[0]['kind'], xml_followup.TOP_IMAGE_JOB)
+            row = xml_followup.read_job(identity)
+            self.assertEqual(row['status'], 'pending_images')
+            baseline = json.loads(row['baseline'])
+            self.assertEqual(baseline['ranking'], [['OT06', 18], ['EN00', 10], ['SM03', 5]])
+            self.assertEqual(baseline['image_assignments'], {'RX-01': [[1, 1, 'OT06'], [2, 1, 'EN00'],
+                                                                    [3, 1, 'SM03'], [6, 1, 'OT06']]})
+            self.assertIsNone(xml_followup.claim())
+            xml_followup.request_images(identity)
+            xml_followup.recover()
+            self.assertEqual(xml_followup.claim()['id'], identity)

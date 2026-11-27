@@ -168,6 +168,46 @@ class NasPerformanceTests(unittest.TestCase):
         self.assertEqual(details['scan_metrics']['xml_reads'], 0)
         self.assertEqual(details['scan_metrics']['barcode_reads'], 1)
 
+    def test_top_image_download_saves_one_png_per_complete_set_and_stops_at_quantity(self):
+        from PySide6.QtGui import QColor, QImage
+        from PySide6.QtWidgets import QApplication
+        from workers.ivs_workers import TopImageDownloadThread
+
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+        app = QApplication.instance() or QApplication([])
+        self.assertIsNotNone(app)
+        base = DefectRecord('RX-01', 'A', 'M', 'RX-', 'T', '1', 'Unit', 'FC', '0', '0',
+                            'SM03', 'SM03', '', 'F', 0, 0, 0, 0, 'data.xml', [])
+        candidates = []
+        skipped = self.root / 'lighting'
+        skipped.mkdir()
+        colors = ['red', 'green', 'blue']
+        for index in range(4):
+            images = [f'/lighting/p{index}{suffix}.bmp' for suffix in ('_Sub2', '', '_Sub1')]
+            candidates.append(replace(base, images=images, img_merge_idx=str(index)))
+            for path, color in zip(images[:2] if index == 0 else images, colors):
+                image = QImage(128, 128, QImage.Format_RGB32)
+                image.fill(QColor(color))
+                self.assertTrue(image.save(str(self.root / path.lstrip('/'))))
+        sftp = self.session()
+        worker = TopImageDownloadThread({'SM03': candidates, 'OT06': [candidates[0]]},
+                                        {'SM03': 2, 'OT06': 1}, self.root / 'export')
+        counts, errors = [], []
+        worker.finished.connect(counts.append)
+        worker.failed.connect(errors.append)
+        with patch('workers.ivs_workers.connect', return_value=(SimpleNamespace(close=lambda: None), sftp)):
+            worker.run()
+        self.assertEqual(errors, [])
+        self.assertEqual(counts, [{'SM03': 2, 'OT06': 0}])
+        self.assertEqual(sftp.raw.reads, 6)
+        outputs = sorted((self.root / 'export').rglob('*.png'))
+        self.assertEqual(len(outputs), 2)
+        for path in outputs:
+            combined = QImage(str(path))
+            self.assertEqual((combined.width(), combined.height()), (384, 172))
+            self.assertEqual([combined.pixelColor(x, 169) for x in (125, 253, 381)],
+                             [QColor(color) for color in colors])
+
 
 class ImageCatalogTests(unittest.TestCase):
     def records(self):

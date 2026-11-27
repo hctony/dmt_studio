@@ -102,6 +102,13 @@ def latest():
     return data.get('contexts', {}).get(data.get('active'), {})
 
 
+def gathered_contexts():
+    contexts = _read().get('contexts', {})
+    return [entry for entry in reversed(tuple(contexts.values()))
+            if any(entry.get('fields', {}).get(name, {}).get('value')
+                   for name in ('vrs_txt_in', 'fvi_txt_in', 'ivs_txt_in', 'txt_in'))]
+
+
 def context(model,lot):
     key=hashlib.sha256((model.strip().upper()+'\n'+lot.strip().upper()).encode()).hexdigest()
     return _read().get('contexts',{}).get(key,{})

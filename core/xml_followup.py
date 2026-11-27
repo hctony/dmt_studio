@@ -1,16 +1,20 @@
 """A PC's shared image lookup queue and historical verification results."""
 from contextlib import closing
 from dataclasses import replace
+from hashlib import sha256
 import json
 import sqlite3
 import time
 import uuid
 
 from core.report_codes import excel_code
+from core.report_trace import SKI_UNKNOWN_ALLOCATED
 from core.utils import unit_idx_to_xy
 
 
 IMAGE_JOB = 'image-lookup-v1'
+TOP_IMAGE_JOB = 'top-images-v1'
+IMAGE_JOB_KINDS = {IMAGE_JOB, TOP_IMAGE_JOB}
 
 
 def connect():
@@ -27,34 +31,64 @@ def connect():
 
 
 def enqueue(model, summary, high_codes):
-    lot = str(summary['lot_id']).strip()
     high = {entry.split()[0] for entry in high_codes if entry}
     if not high:
         return None
-    if not model or not lot or not summary['xml_followup_inputs']:
+    if not summary.get('xml_followup_inputs'):
         raise ValueError('XML_FOLLOWUP_MISSING_MODEL_LOT_OR_TXT')
+    baseline = report_image_baseline(model, summary, high, IMAGE_JOB)
+    if baseline['image_assignments']:
+        return store_job(model, summary['lot_id'], baseline, 'queued')
+    return None
+
+
+def register_top(model, summary, report):
+    from core.report_codes import ordered_report_codes
+
+    counts = [(code, count) for code, count in ordered_report_codes(report)
+              if code.upper() not in {'OT14', 'UNKNOWN', '9998'}]
+    ranking = sorted(counts, key=lambda item: (-item[1], item[0]))[:3]
+    if not ranking:
+        return None
+    baseline = report_image_baseline(model, summary, {code for code, _ in ranking}, TOP_IMAGE_JOB)
+    baseline['ranking'] = ranking
+    versions = summary['report_trace'].get('file_versions', {})
+    baseline['source_revision'] = sha256(json.dumps(versions, sort_keys=True).encode('utf-8')).hexdigest()
+    state = 'pending_images' if baseline['image_assignments'] else 'images_missing'
+    return store_job(model, summary['lot_id'], baseline, state)
+
+
+def report_image_baseline(model, summary, codes, kind):
+    lot = str(summary['lot_id']).strip()
+    if not model or not lot:
+        raise ValueError('XML_FOLLOWUP_MISSING_MODEL_OR_LOT')
     trace = summary['report_trace']
     from core.yield_handoff import context
     grid = context(model, lot).get('gathering_grid')
-    evidence = summary['xml_followup_evidence']
+    evidence = {strip: {'width': row.get('x_count')} for strip, row in trace.get('strips', {}).items()}
+    evidence.update(summary.get('xml_followup_evidence') or {})
     if grid and grid[0] * grid[1] == summary['units_per_strip']:
-        evidence = {strip: {**row, 'width': grid[0]} for strip, row in evidence.items()}
+        evidence = {strip: {'width': grid[0]} for strip in evidence}
     assignments = {}
     for group in trace['groups']:
         code = excel_code(group['code'])
-        if code in high:
+        if kind == TOP_IMAGE_JOB and group.get('reason') in {
+                SKI_UNKNOWN_ALLOCATED, 'ski_unassigned', 'xout_fill', 'missing_code'}:
+            continue
+        if code in codes:
             assignments.setdefault(group['strip_id'], []).extend(
                 [x, y, code] for x, y in group['coords'])
     scope = dict(summary.get('rework_scope') or {})
     if scope.get('reuse_xml'):
         # A TXT-only recheck keeps the original inspection XML eligible.
         scope = {}
-    baseline = {'units': summary['units_per_strip'], 'strips': trace['selected_strip_ids'],
-                'evidence': evidence, 'scope': scope, 'high': sorted(high), 'image_assignments': assignments,
-                'total_units': summary['total_units']}
-    baseline = image_baseline(baseline)
-    if not baseline['image_assignments']:
-        return None
+    return image_baseline({'kind': kind, 'strips': trace['selected_strip_ids'],
+                           'evidence': evidence, 'scope': scope, 'high': sorted(codes),
+                           'image_assignments': assignments, 'total_units': summary['total_units']})
+
+
+def store_job(model, lot, baseline, status):
+    lot = str(lot).strip()
     text = json.dumps(baseline, sort_keys=True)
     now = time.time()
     identity = uuid.uuid4().hex
@@ -65,7 +99,7 @@ def enqueue(model, summary, high_codes):
         if existing:
             return existing['id']
         db.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)',
-                   (identity, model, lot, now, now, 'queued', text, '{}', ''))
+                   (identity, model, lot, now, now, status, text, '{}', ''))
     return identity
 
 
@@ -78,7 +112,7 @@ def image_baseline(baseline):
         if matches and strip in evidence and evidence[strip].get('width'):
             assignments[strip] = matches
     return {
-        'kind': IMAGE_JOB,
+        'kind': baseline.get('kind', IMAGE_JOB),
         'strip_count': baseline.get('strip_count', len(baseline.get('strips', []))),
         'total_units': baseline.get('total_units', 0),
         'scope': baseline.get('scope', {}),
@@ -93,7 +127,7 @@ def recover():
         db.execute('BEGIN IMMEDIATE')
         for row in db.execute("SELECT id,status,baseline FROM jobs WHERE status IN ('queued','running','cancelling')").fetchall():
             baseline = json.loads(row['baseline'])
-            if baseline.get('kind') != IMAGE_JOB:
+            if baseline.get('kind') not in IMAGE_JOB_KINDS:
                 baseline = image_baseline(baseline)
                 status = 'pending_images' if baseline['image_assignments'] else 'images_skipped'
                 db.execute('UPDATE jobs SET status=?, updated=?, baseline=? WHERE id=?',
@@ -142,7 +176,8 @@ def finish(identity, status, details, xml=None):
 def list_jobs(model='', lot='', limit=200):
     with closing(connect()) as db:
         return [dict(row) for row in db.execute('''
-            SELECT id,model,lot,status,created,updated FROM jobs
+            SELECT id,model,lot,status,created,updated,
+                   CASE WHEN json_valid(baseline) THEN json_extract(baseline, '$.kind') END AS kind FROM jobs
             WHERE instr(upper(model), upper(?)) > 0 AND instr(upper(lot), upper(?)) > 0
             ORDER BY created DESC,id DESC LIMIT ?''', (model, lot, limit))]
 
@@ -199,6 +234,8 @@ def image_records(baseline, records):
             continue
         if record.is_dummy:
             code = excel_code(record.ivs_1)
+            if baseline.get('kind') == TOP_IMAGE_JOB and record.is_dummy_9999 and 'SM03_DUMMY9999' in assigned.values():
+                code = 'SM03_DUMMY9999'
             if code not in assigned.values():
                 continue
         else:

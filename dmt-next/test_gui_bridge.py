@@ -101,6 +101,67 @@ class GuiTests(unittest.TestCase):
                 released.set()
                 history.worker.wait(5000)
 
+    def test_top_images_backfills_only_selected_lot_and_registers_new_low_rate_report(self):
+        from dataclasses import asdict
+        from core import xml_followup, yield_handoff
+        from core.models import DefectRecord
+
+        with patch.object(yield_handoff, 'DATA_DIR', self.root), patch.dict(os.environ, {
+                'DMT_CACHE_DIR': str(self.root / 'cache')}):
+            for lot in ('OLDER-', 'NEWEST-'):
+                strip = lot + '01'
+                ski = self.root / f'{lot}.ski'
+                ski.write_text(f'{strip},1,1\n')
+                gather = f'1,{lot},{strip}\n{lot},{strip},1,1,T,SM03\n{lot},{strip},EOS\n{lot},EOL\n'
+                self.assertTrue(yield_handoff.remember('MODEL', lot, kind='VRS', output=gather, config={
+                    'x_count': 22, 'y_count': 4, 'allowance': 18, 'ski_path': str(ski)}))
+
+            tab = self.tab(6)
+            self.answers['item'] = 'MODEL / OLDER-'
+            self.action(tab.btn_previous_lot, 'click')
+            self.assertIn('OLDER-', tab.handoff_status.text())
+            self.action(tab.btn_calc, 'click')
+            self.assertEqual(tab.summary['lot_id'], 'OLDER-')
+            self.assertEqual(xml_followup.list_jobs(), [])
+            self.action(tab.btn_top_images, 'click')
+            self.assertEqual([row['lot'] for row in xml_followup.list_jobs()], ['OLDER-'])
+
+            self.action(tab.btn_workflow_inputs, 'click')
+            self.action(tab.btn_calc, 'click')
+            self.assertEqual(tab.summary['lot_id'], 'NEWEST-')
+            report = self.root / 'newest.xlsx'
+            self.answers['save'] = str(report)
+            self.action(tab.btn_export_excel, 'click')
+            self.assertTrue(report.exists(), self.dialogs)
+            entries = xml_followup.list_jobs()
+            self.assertEqual([row['lot'] for row in entries], ['NEWEST-', 'OLDER-'])
+            self.assertTrue(all(row['kind'] == xml_followup.TOP_IMAGE_JOB for row in entries))
+            self.assertIsNone(xml_followup.claim())
+            history = self.tab(11)
+            self.assertEqual(history.lookup.text(), 'TOP 3 불량 이미지 조회')
+            self.assertTrue(history.lookup.isEnabled())
+            self.assertFalse(history.download.isEnabled())
+            identity = entries[0]['id']
+            self.action(history.lookup, 'click')
+            self.assertEqual(xml_followup.claim()['id'], identity)
+            record = DefectRecord('NEWEST-01', 'A', 'MODEL', 'NEWEST-', 'T', '1', 'Unit', 'FC', '0', '0',
+                                  'SM03', 'SM03', '', 'F', 0, 0, 0, 0, 'data.xml', ['/a', '/b', '/c'])
+            xml_followup.finish(identity, 'images_ready', {'image_counts': {'SM03': 1}},
+                                {'schema': 'dmt-studio-ivs-v1', 'records': [asdict(record)]})
+            history.refresh()
+            self.action(history.download, 'click')
+            dialog = history.range_dialog
+            self.assertEqual(dialog.windowTitle(), 'TOP 3 불량 이미지 다운로드')
+            self.assertEqual(dialog.quantities['SM03'].text(), '1')
+            submit = next(button for button in dialog.findChildren(W.QPushButton) if button.text() == '다운로드')
+            with patch.object(history, 'save_top_images') as save:
+                self.action(dialog.quantities['SM03'], 'input', '2')
+                self.action(submit, 'click')
+                save.assert_not_called()
+                self.action(dialog.quantities['SM03'], 'input', '1')
+                self.action(submit, 'click')
+                self.assertEqual(save.call_args.args[1], {'SM03': 1})
+
     def test_stale_disabled_and_reentrant_clicks_refresh_without_running_twice(self):
         tab = self.tab(6)
         button = tab.btn_its_coordinates

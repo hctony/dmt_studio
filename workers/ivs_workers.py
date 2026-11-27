@@ -7,8 +7,9 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
+from uuid import uuid4
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QThread, Signal
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QSaveFile, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter
 from PySide6.QtCore import Qt
 
@@ -386,6 +387,98 @@ class DownloadThread(QThread):
                     except Exception as exc:
                         self.progress.emit(f"저장 실패: {remote_path} ({exc})")
                 self.progress.emit(f"{i}/{len(self.records)} 다운로드")
+            self.finished.emit(saved)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        finally:
+            if sftp:
+                sftp.close()
+            if ssh:
+                ssh.close()
+
+
+class TopImageDownloadThread(QThread):
+    """Save up to the requested number of complete three-light PNGs per code."""
+
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, candidates, quantities, directory):
+        super().__init__()
+        self.candidates = candidates
+        self.quantities = quantities
+        self.directory = Path(directory)
+        self.run_id = uuid4().hex[:12]
+        self.dmt_progress = {'stage': _('TOP 3 불량 이미지 다운로드'), 'value': 0,
+                             'max': sum(quantities.values()), 'detail': ''}
+
+    def read_set(self, sftp, record):
+        paths = record.images
+        if len(paths) != 3 or len(set(paths)) != 3 or not all(paths):
+            return None
+        images = []
+        try:
+            if getattr(sftp, '_dmt_scan_session', False) is True:
+                paths = [sftp.resolve_image(path) for path in paths]
+                for path in paths:
+                    sftp.metadata(path)
+            for path in paths:
+                with sftp.open(path, 'rb') as source:
+                    image = QImage.fromData(source.read())
+                if image.isNull():
+                    return None
+                images.append(image)
+        except (FileNotFoundError, PermissionError):
+            return None
+
+        header_height = 44
+        combined = QImage(sum(image.width() for image in images), max(image.height() for image in images) + header_height,
+                          QImage.Format_RGB32)
+        if combined.isNull():
+            raise OSError('IMAGE_COMPOSITION_FAILED')
+        combined.fill(Qt.black)
+        painter = QPainter(combined)
+        font = QFont('Arial')
+        font.setPixelSize(14)
+        painter.setFont(font)
+        painter.setPen(Qt.white)
+        painter.drawText(6, 17, f'{record.lot} · {record.strip_id} · U{record.unit_idx} · {record.face} · {record.ivs_1}')
+        left = 0
+        for number, image in enumerate(images):
+            painter.drawText(left + 6, 38, f'LIGHT_{number}')
+            painter.drawImage(left, header_height, image)
+            left += image.width()
+        painter.end()
+        return combined
+
+    def run(self):
+        ssh = sftp = None
+        saved = dict.fromkeys(self.quantities, 0)
+        try:
+            ssh, sftp = connect()
+            for code, amount in self.quantities.items():
+                folder = self.directory / sanitize_filename(code)
+                for record in self.candidates[code]:
+                    if saved[code] >= amount:
+                        break
+                    self.dmt_progress = {**self.dmt_progress, 'value': sum(saved.values()),
+                                         'detail': f'{code} · {record.strip_id}'}
+                    image = self.read_set(sftp, record)
+                    if image is None:
+                        continue
+                    folder.mkdir(parents=True, exist_ok=True)
+                    name = sanitize_filename(
+                        f'{record.lot}_{record.strip_id}_U{record.unit_idx}_{record.face}_'
+                        f'p{record.img_merge_idx}_{self.run_id}_{saved[code]+1:04d}')
+                    destination = QSaveFile(str(folder / (name + '.png')))
+                    if not destination.open(QIODevice.WriteOnly):
+                        raise OSError(destination.errorString())
+                    if not image.save(destination, 'PNG'):
+                        destination.cancelWriting()
+                        raise OSError(destination.errorString())
+                    if not destination.commit():
+                        raise OSError(destination.errorString())
+                    saved[code] += 1
             self.finished.emit(saved)
         except Exception:
             self.failed.emit(traceback.format_exc())

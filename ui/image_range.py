@@ -40,3 +40,47 @@ class ImageRangeDialog(QDialog):
         except ValueError as error:
             QMessageBox.warning(self,_('범위 확인'),str(error));return
         self.accept();self.submitted.emit(code,start,end)
+
+
+class TopImageDownloadDialog(QDialog):
+    submitted = Signal(dict)
+
+    def __init__(self, ranking, counts, parent=None):
+        super().__init__(parent)
+        self.setProperty('dmt_presentation', 'image-range-dialog')
+        self.setWindowTitle(_('TOP 3 불량 이미지 다운로드'))
+        self.quantities = {}
+        self.counts = counts
+        layout = QVBoxLayout(self)
+        fields = QWidget()
+        form = QFormLayout(fields)
+        for rank, (code, _defect_count) in enumerate(ranking, 1):
+            count = counts.get(code, 0)
+            quantity = QLineEdit(str(min(10, count)))
+            quantity.setEnabled(count > 0)
+            self.quantities[code] = quantity
+            form.addRow(f"{rank}. {code} · {count} {_('후보 세트')}", quantity)
+        layout.addWidget(fields)
+        note = QLabel(_('코드별 저장 장수를 입력하세요. 0은 건너뛰고, 세 조명을 합쳐 PNG 한 장으로 저장합니다.'))
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        row = QHBoxLayout()
+        download = QPushButton(_('다운로드'))
+        cancel = QPushButton(_('취소'))
+        download.clicked.connect(self.choose)
+        cancel.clicked.connect(self.reject)
+        row.addWidget(download)
+        row.addWidget(cancel)
+        layout.addLayout(row)
+
+    def choose(self):
+        try:
+            sizes = {code: int(field.text().strip()) for code, field in self.quantities.items()}
+            if not any(sizes.values()) or any(not 0 <= size <= self.counts.get(code, 0)
+                                              for code, size in sizes.items()):
+                raise ValueError
+        except ValueError:
+            QMessageBox.warning(self, _('범위 확인'), _('후보 수 이내로 한 장 이상 선택하세요.'))
+            return
+        self.accept()
+        self.submitted.emit({code: size for code, size in sizes.items() if size})
